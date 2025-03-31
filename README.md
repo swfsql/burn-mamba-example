@@ -1,6 +1,6 @@
-# mamba-minimal-burn-example
+# burn-mamba-example
 
-Click [here](https://swfsql.github.io/mamba-minimal-burn-example/) to run the model in your browser.
+(WIP/placeholder) Click [here](https://swfsql.github.io/burn-mamba-example/) to run the model in your browser.
 
 ### Information
 
@@ -14,7 +14,7 @@ RUSTFLAGS="-C target-cpu=native"
 cargo run --release --no-default-features --features "native,ndarray"
 ```
 
-##### (WIP) WASM
+##### (WIP/placeholder) WASM
 ```bash
 # no-ui (web console only)
 wasm-pack build --release --target web --no-default-features
