@@ -558,7 +558,7 @@ dependencies = [
 [[package]]
 name = "burn-mamba"
 version = "0.1.0"
-source = "git+https://github.com/swfsql/burn-mamba.git?rev=0ce4ce15ecd79af72fabe448a02d665aff7bd835#0ce4ce15ecd79af72fabe448a02d665aff7bd835"
+source = "git+https://github.com/swfsql/burn-mamba.git?rev=53a54d5535aca7cf307f8ed744c7618bef343e7c#53a54d5535aca7cf307f8ed744c7618bef343e7c"
 dependencies = [
  "burn",
  "num-traits",

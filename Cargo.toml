@@ -34,7 +34,7 @@ rand = "0.9.0"
 [dependencies.burn-mamba]
 git = "https://github.com/swfsql/burn-mamba.git"
 # 2025-03-30 main
-rev = "0ce4ce15ecd79af72fabe448a02d665aff7bd835"
+rev = "53a54d5535aca7cf307f8ed744c7618bef343e7c"
 
 # non-wasm target
 
