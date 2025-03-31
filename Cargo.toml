@@ -1,0 +1,77 @@
+[package]
+name = "burn-mamba-example"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+# default = []
+# default = ["wasm_yew_ui"]
+default = ["native", "ndarray"]
+native = []
+wasm_yew_ui = []
+ndarray = ["burn/ndarray"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "burn_mamba_example"
+path = "src/native/main.rs"
+required-features = ["native"]
+
+[dependencies]
+anyhow = "1.0.0"
+log = "0.4.26"
+pretty_env_logger = "0.5.0"
+candle-core = "0.8.4"
+tokenizers = { version = "0.21.1", default-features = false, features = [
+    "unstable_wasm",
+] }
+safetensors = { version = "0.5.2", default-features = false, features = ["std"] }
+candle-transformers = "0.8.4"
+rand = "0.9.0"
+
+[dependencies.burn-mamba]
+git = "https://github.com/swfsql/burn-mamba.git"
+# 2025-03-30 main
+rev = "0ce4ce15ecd79af72fabe448a02d665aff7bd835"
+
+# non-wasm target
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+memmap2 = { version = "0.9.0", default-features = false }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.burn]
+#version = "0.16.0"
+# 2025-03-28 main
+git = "https://github.com/tracel-ai/burn.git"
+rev = "3bc9c7a4e43365a80a36c38a04dfa40bb21c529d"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.hf-hub]
+version = "0.3.2"
+git = "https://github.com/swfsql/hf-hub.git"
+rev = "a411dde1a7ab30d782cb978955b922551fb7eeb1"
+default-features = false
+features = ["online"]
+
+# wasm target
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1.6"
+reqwest = { version = "0.11.23", features = ["json"] }
+wasm-bindgen = { version = "0.2.91", features = ["serde-serialize"] }
+wasm-bindgen-futures = "0.4.24"
+log = "0.4.6"
+console_log = { version = "1.0.0", features = ["color"] }
+indexed_db_futures = "0.4.1"
+web-time = "1.0.0"
+humansize = "2.1.3"
+gloo-timers = { version = "0.3.0", features = ["futures"] }
+yew = { version = "0.21.0", features = ["csr"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.hf-hub]
+version = "0.3.2"
+git = "https://github.com/swfsql/hf-hub.git"
+rev = "a411dde1a7ab30d782cb978955b922551fb7eeb1"
+default-features = false
+features = ["wasm"]
