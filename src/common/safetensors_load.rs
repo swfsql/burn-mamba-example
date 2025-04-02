@@ -2,54 +2,16 @@ use burn::module::Param;
 use burn::prelude::*;
 use safetensors::SafeTensors;
 
-pub fn load_param<B: Backend, const D: usize>(
-    param: &mut Param<Tensor<B, D>>,
-    name: String,
-    tensors: &SafeTensors,
-    device: &B::Device,
-    movedim: bool,
-) -> anyhow::Result<()> {
-    let data = tensors.tensor(&name)?.data();
-
-    // converts u8 data to f32
-    let mut data_f32 = Vec::with_capacity(data.len() / 4);
-    let mut buf = [0; 4];
-    for chunk in data.chunks(4) {
-        buf.copy_from_slice(chunk);
-        let data_u = u32::from_le_bytes(buf);
-        data_f32.push(f32::from_bits(data_u));
-        // log::info!("{}", f32::from_bits(data_u));
-    }
-
-    let shape = param.dims();
-    let tensor: Tensor<B, 1> = Tensor::from_data(data_f32.as_slice(), device);
-    let tensor = if movedim {
-        // transpose some linear layers
-        let mut temp_shape = shape.clone();
-        temp_shape[0] = shape[1];
-        temp_shape[1] = shape[0];
-        tensor.reshape(temp_shape).movedim(0, 1)
-    } else {
-        tensor.reshape(shape)
-    };
-    *param = Param::from_tensor(tensor);
-
-    Ok(())
-}
-
 pub fn safetensors_load<B: Backend>(
-    mamba_filename: &std::path::Path,
+    mamba_safetensors_bytes: &[u8],
     mamba_config: burn_mamba::MambaConfig,
     device: &B::Device,
 ) -> anyhow::Result<burn_mamba::Mamba<B>> {
     let mut mamba = mamba_config.init::<B>(&device);
-    let f = std::fs::File::open(mamba_filename)?;
-    let buffer = unsafe { memmap2::MmapOptions::new().map(&f)? };
-    let tensors = &safetensors::SafeTensors::deserialize(&buffer)?;
+    let tensors = &safetensors::SafeTensors::deserialize(&mamba_safetensors_bytes)?;
     // info!("{:?}", tensors.names());
     //
 
-    // tensors.tensor(&name("embedding.weight"))?.
     let name = |n: &str| format!("backbone.{n}");
     load_param(
         &mut mamba.embedding.weight,
@@ -145,4 +107,38 @@ pub fn safetensors_load<B: Backend>(
     });
 
     Ok(mamba)
+}
+
+pub fn load_param<B: Backend, const D: usize>(
+    param: &mut Param<Tensor<B, D>>,
+    name: String,
+    tensors: &SafeTensors,
+    device: &B::Device,
+    movedim: bool,
+) -> anyhow::Result<()> {
+    let data = tensors.tensor(&name)?.data();
+
+    // converts u8 data to f32
+    let mut data_f32 = Vec::with_capacity(data.len() / 4);
+    let mut buf = [0; 4];
+    for chunk in data.chunks(4) {
+        buf.copy_from_slice(chunk);
+        let data_u = u32::from_le_bytes(buf);
+        data_f32.push(f32::from_bits(data_u));
+    }
+
+    let shape = param.dims();
+    let tensor: Tensor<B, 1> = Tensor::from_data(data_f32.as_slice(), device);
+    let tensor = if movedim {
+        // transpose some linear layers
+        let mut temp_shape = shape.clone();
+        temp_shape[0] = shape[1];
+        temp_shape[1] = shape[0];
+        tensor.reshape(temp_shape).movedim(0, 1)
+    } else {
+        tensor.reshape(shape)
+    };
+    *param = Param::from_tensor(tensor);
+
+    Ok(())
 }

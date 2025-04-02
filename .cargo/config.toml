@@ -1,0 +1,7 @@
+## for IDE wasm development, you may want to enable this build.target setting:
+# [build]
+# target = "wasm32-unknown-unknown"
+
+## https://github.com/rust-random/getrandom/#webassembly-support
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

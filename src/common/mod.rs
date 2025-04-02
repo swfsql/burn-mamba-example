@@ -1,8 +1,10 @@
+mod safetensors_load;
 pub mod token_output_stream;
 
 use burn::prelude::*;
 use burn_mamba;
 use candle_transformers::generation::LogitsProcessor;
+pub use safetensors_load::{load_param, safetensors_load};
 use token_output_stream::*;
 use tokenizers::Tokenizer;
 
@@ -83,7 +85,7 @@ impl<B: Backend> MambaWrapper<B> {
     }
 
     /// Initializes a list of empty (zero, null) [burn_mamba::step::MambaBlockCache] for a cached run.
-    pub fn empty_cache(
+    pub fn empty_caches(
         &self,
         batch: usize,
     ) -> anyhow::Result<Vec<burn_mamba::step::MambaBlockCache<B>>> {
@@ -182,11 +184,11 @@ impl<B: Backend> MambaWrapper<B> {
         }
         std::io::stdout().flush()?;
 
-        let mut states = self.empty_cache(1)?;
+        let mut caches = self.empty_caches(1)?;
 
         let mut i = 0;
         while i < sample_len {
-            let next_logits = self.step(tokens[i], Some(&mut states))?;
+            let next_logits = self.step(tokens[i], Some(&mut caches))?;
             let next_token = logits_processor_config.add_logits(i, &mut tokens, next_logits)?;
             if next_token == eos_token {
                 break;

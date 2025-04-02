@@ -1,7 +1,5 @@
-pub mod safetensors_load;
-
 use burn::prelude::*;
-use burn_mamba_example::{LogitsProcessorWrapper, MambaWrapper, hf};
+use burn_mamba_example::{LogitsProcessorWrapper, MambaWrapper, hf, safetensors_load};
 use hf_hub::types::FilePath;
 use hf_hub::{
     Repo, RepoType,
@@ -12,7 +10,8 @@ use log::info;
 
 #[cfg(feature = "ndarray")]
 type MyBackend = burn::backend::NdArray<f32, i32>;
-// type MyBackend = burn::backend::Wgpu<f32, i32>;
+#[cfg(feature = "wgpu")]
+type MyBackend = burn::backend::Wgpu<f32, i32>;
 
 fn main() -> anyhow::Result<()> {
     let start = std::time::Instant::now();
@@ -36,8 +35,6 @@ fn main() -> anyhow::Result<()> {
         RepoType::Model,
         RevisionPath(hf::mamba_130m::REVISION_PATH.into()),
     ));
-    // let mamba_config_filename = repo.get(MAMBA_CONFIG)?;
-    // info!("mamba {MAMBA_CONFIG} path: {mamba_config_filename:?}");
     let mamba_filename = repo.get(&FilePath(
         hf::mamba_130m::FILE_PATH_MODEL_SAFETENSORS.into(),
     ))?;
@@ -54,17 +51,18 @@ fn main() -> anyhow::Result<()> {
 
     let start = std::time::Instant::now();
     info!("started loading the model");
+    let mamba_safetensors_bytes = {
+        let f = std::fs::File::open(mamba_filename)?;
+        unsafe { memmap2::MmapOptions::new().map(&f)? }
+    };
     let mamba_config = burn_mamba::MambaConfig::new(
         hf::mamba_130m::N_LAYER,
         hf::mamba_130m::PADDED_VOCAB_SIZE,
         burn_mamba::MambaBlockConfig::new(hf::mamba_130m::D_MODEL),
         true,
     );
-    let mamba = safetensors_load::safetensors_load::<MyBackend>(
-        &mamba_filename,
-        mamba_config.clone(),
-        &device,
-    )?;
+    let mamba =
+        safetensors_load::<MyBackend>(&mamba_safetensors_bytes, mamba_config.clone(), &device)?;
     info!("loaded the model in {:?}", start.elapsed());
 
     let mut models = MambaWrapper::new(tokenizer, mamba, mamba_config);
