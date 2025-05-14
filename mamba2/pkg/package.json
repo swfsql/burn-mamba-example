@@ -1,0 +1,15 @@
+{
+  "name": "burn-mamba-example",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "burn_mamba_example_bg.wasm",
+    "burn_mamba_example.js",
+    "burn_mamba_example.d.ts"
+  ],
+  "main": "burn_mamba_example.js",
+  "types": "burn_mamba_example.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
