@@ -311,6 +311,7 @@ impl<B: burn::prelude::Backend> model::Model<B> {
                 self.step = 0;
                 let models_wrapper = self.models_wrapper.as_mut().unwrap();
                 let (tokens, eos_token) = models_wrapper.models.reset_prompt(&self.input).unwrap();
+                // TODO: reset preprocessor
                 self.tokens = tokens;
                 self.eos_token = eos_token;
 

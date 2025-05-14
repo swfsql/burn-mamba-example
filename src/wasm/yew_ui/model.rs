@@ -1,4 +1,7 @@
-use crate::{LogitsProcessorWrapper, MambaWrapper, hf, safetensors_load};
+// use crate::safetensors_load;
+use crate::{
+    LogitsProcessorWrapper, MambaBlockCaches, MambaModel, MambaModelConfig, MambaWrapper, hf,
+};
 use burn::prelude::*;
 use hf_hub::{
     Repo, RepoType,
@@ -6,6 +9,16 @@ use hf_hub::{
     types::{Endpoint, FilePath, FileUrl, RepoId, RevisionPath, TmpFileBlobKeyList},
 };
 use tokenizers::Tokenizer;
+
+#[cfg(feature = "mamba1")]
+use crate::safetensors_load_mamba1;
+#[cfg(feature = "mamba1")]
+use burn_mamba::{mamba1, mamba1_block};
+
+#[cfg(feature = "mamba2")]
+use crate::safetensors_load_mamba2;
+#[cfg(feature = "mamba2")]
+use burn_mamba::{mamba2, mamba2_block};
 
 pub struct Model<B: Backend> {
     // general data
@@ -80,15 +93,28 @@ impl<B: Backend> Default for Model<B> {
                     filepath: FilePath(hf::tokenizer::FILE_PATH_TOKENIZER_JSON.into()),
                 }),
             ),
+            #[cfg(feature = "mamba1")]
             mamba: ModelData::new(
                 "Mamba-130m".into(),
                 ModelDataConfig::Huggingface(HuggingfaceConfig {
                     endpoint: Endpoint::default(),
                     url_template: UrlTemplate::default(),
-                    repo_id: RepoId(hf::mamba_130m::REPO_ID.into()),
+                    repo_id: RepoId(hf::mamba1_130m::REPO_ID.into()),
                     repo_type: RepoType::Model,
-                    revision: RevisionPath(hf::mamba_130m::REVISION_PATH.into()),
-                    filepath: FilePath(hf::mamba_130m::FILE_PATH_MODEL_SAFETENSORS.into()),
+                    revision: RevisionPath(hf::mamba1_130m::REVISION_PATH.into()),
+                    filepath: FilePath(hf::mamba1_130m::FILE_PATH_MODEL_SAFETENSORS.into()),
+                }),
+            ),
+            #[cfg(feature = "mamba2")]
+            mamba: ModelData::new(
+                "Mamba2-130m".into(),
+                ModelDataConfig::Huggingface(HuggingfaceConfig {
+                    endpoint: Endpoint::default(),
+                    url_template: UrlTemplate::default(),
+                    repo_id: RepoId(hf::mamba2_130m::REPO_ID.into()),
+                    repo_type: RepoType::Model,
+                    revision: RevisionPath(hf::mamba2_130m::REVISION_PATH.into()),
+                    filepath: FilePath(hf::mamba2_130m::FILE_PATH_MODEL_SAFETENSORS.into()),
                 }),
             ),
             models_wrapper_builder: MambaWrapperBuilder::default(),
@@ -112,8 +138,8 @@ impl<B: Backend> Default for Model<B> {
 
 pub struct MambaWrapperBuilder<B: Backend> {
     pub tokenizer: Option<Tokenizer>,
-    pub mamba: Option<burn_mamba::Mamba<B>>,
-    pub mamba_config: Option<burn_mamba::MambaConfig>,
+    pub mamba: Option<MambaModel<B>>,
+    pub mamba_config: Option<MambaModelConfig>,
 }
 
 impl<B: Backend> Default for MambaWrapperBuilder<B> {
@@ -121,12 +147,22 @@ impl<B: Backend> Default for MambaWrapperBuilder<B> {
         MambaWrapperBuilder {
             tokenizer: None,
             mamba: None,
-            mamba_config: Some(burn_mamba::MambaConfig::new(
-                hf::mamba_130m::N_LAYER,
-                hf::mamba_130m::PADDED_VOCAB_SIZE,
-                burn_mamba::MambaBlockConfig::new(hf::mamba_130m::D_MODEL),
+            #[cfg(feature = "mamba1")]
+            mamba_config: Some(MambaModelConfig::Mamba1(mamba1::Mamba1Config::new(
+                hf::mamba1_130m::N_LAYER,
+                hf::mamba1_130m::VOCAB_SIZE,
+                hf::mamba1_130m::PAD_VOCAB_SIZE_MULTIPLE,
+                mamba1_block::Mamba1BlockConfig::new(hf::mamba1_130m::D_MODEL),
                 true,
-            )),
+            ))),
+            #[cfg(feature = "mamba2")]
+            mamba_config: Some(MambaModelConfig::Mamba2(mamba2::Mamba2Config::new(
+                hf::mamba2_130m::N_LAYER,
+                hf::mamba2_130m::VOCAB_SIZE,
+                hf::mamba2_130m::PAD_VOCAB_SIZE_MULTIPLE,
+                mamba2_block::Mamba2BlockConfig::new(hf::mamba2_130m::D_MODEL),
+                true,
+            ))),
         }
     }
 }
@@ -146,16 +182,19 @@ impl<B: Backend> MambaWrapperBuilder<B> {
                     .unwrap();
                 self.tokenizer = Some(tokenizer);
             }
+            #[cfg(feature = "mamba1")]
             ModelSelection::Mamba => {
                 let mamba = {
                     let timing = web_time::Instant::now();
                     log::info!("initializing and loading mamba model");
-                    let mamba = safetensors_load::<B>(
-                        &data,
-                        self.mamba_config.clone().expect("missing mamba config"),
-                        &device,
-                    )
-                    .unwrap();
+
+                    #[allow(irrefutable_let_patterns)]
+                    let MambaModelConfig::Mamba1(config) =
+                        self.mamba_config.clone().expect("missing mamba config")
+                    else {
+                        unreachable!()
+                    };
+                    let mamba = safetensors_load_mamba1::<B>(&data, config, &device).unwrap();
                     log::info!(
                         "mamba initialized and loaded in {}ms",
                         timing.elapsed().as_millis()
@@ -163,7 +202,29 @@ impl<B: Backend> MambaWrapperBuilder<B> {
 
                     mamba
                 };
-                self.mamba = Some(mamba);
+                self.mamba = Some(MambaModel::Mamba1(mamba));
+            }
+            #[cfg(feature = "mamba2")]
+            ModelSelection::Mamba => {
+                let mamba = {
+                    let timing = web_time::Instant::now();
+                    log::info!("initializing and loading mamba model");
+
+                    #[allow(irrefutable_let_patterns)]
+                    let MambaModelConfig::Mamba2(config) =
+                        self.mamba_config.clone().expect("missing mamba config")
+                    else {
+                        unreachable!()
+                    };
+                    let mamba = safetensors_load_mamba2::<B>(&data, config, &device).unwrap();
+                    log::info!(
+                        "mamba initialized and loaded in {}ms",
+                        timing.elapsed().as_millis()
+                    );
+
+                    mamba
+                };
+                self.mamba = Some(MambaModel::Mamba2(mamba));
             }
         }
     }
@@ -217,7 +278,7 @@ impl<T> Connection<T> {
 
 pub struct Wrapper<B: Backend> {
     pub models: MambaWrapper<B>,
-    pub caches: Vec<burn_mamba::mamba_block::step::MambaBlockCache<B>>,
+    pub caches: MambaBlockCaches<B>,
     pub processor: LogitsProcessorWrapper,
 }
 

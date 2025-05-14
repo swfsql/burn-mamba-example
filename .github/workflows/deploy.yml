@@ -39,23 +39,29 @@ jobs:
             - name: Download wasm-pack
               run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
-            # wasm-pack build --release also optimizes the wasm binary
-            - name: Build Release wasm
-              run: wasm-pack build --release --target web --out-dir "frontend/pkg" --no-default-features --features "ndarray,yew"
+            - name: Build Release wasm for Mamba1
+              run: wasm-pack build --release --target web --out-dir "frontend/mamba1/pkg" --no-opt --no-default-features --features "ndarray,yew,mamba1"
+
+            - name: Build Release wasm for Mamba2
+              run: wasm-pack build --release --target web --out-dir "frontend/mamba2/pkg" --no-opt --no-default-features --features "ndarray,yew,mamba2"
 
             - name: Prepare Wasm Deploy
               run: |
                   set -e
                   # Prepare the publishing structure
-                  mkdir -p publish/
+                  mkdir -p publish/{mamba1,mamba2}
 
                   # move assets
-                  mv frontend/index.html publish/
-                  mv frontend/index.js publish/
-                  mv frontend/pkg/ publish/pkg/
+                  mv frontend/mamba1/index.html publish/mamba1/
+                  mv frontend/mamba2/index.html publish/mamba2/
+                  mv frontend/mamba1/index.js publish/mamba1/
+                  mv frontend/mamba2/index.js publish/mamba2/
+                  mv frontend/mamba1/pkg/ publish/mamba1/pkg/
+                  mv frontend/mamba2/pkg/ publish/mamba2/pkg/
 
                   # rm gitignore
-                  rm publish/pkg/.gitignore
+                  rm publish/mamba1/pkg/.gitignore
+                  rm publish/mamba2/pkg/.gitignore
 
             # Publish
             - name: Frontend Deploy

@@ -6,18 +6,29 @@ edition = "2024"
 [features]
 ## defaults
 default = [] # by default just re-exports common/ as a library
-# default = ["native", "ndarray"] # for native dev
-# default = ["ndarray"] # for wasm web-console dev - also check .cargo/config.toml
-# default = ["ndarray", "yew"] # for wasm + web-yew dev - also check .cargo/config.toml
+# default = ["native", "ndarray", "mamba2"] # for native dev
+# default = ["native", "wgpu", "mamba2"] # for native wgpu
+# default = ["native", "tch", "mamba2"] # for native torch
+# default = ["ndarray", "mamba2"] # for wasm web-console dev - also check .cargo/config.toml
+# default = ["ndarray", "yew", "mamba2"] # for wasm + web-yew dev - also check .cargo/config.toml
+#
+## mamba version (can have both features only as a library)
+mamba1 = ["burn-mamba/mamba1"]
+mamba2 = ["burn-mamba/mamba2"]
 #
 ## binary from src/native/main.rs
 native = []
 #
-## burn features
-ndarray = ["burn/ndarray"]
-wgpu = ["burn/wgpu"] # note: currently (burn 0.17.0) has numerical error for cacheless mode
+## burn backend
+ndarray = ["burn/ndarray"] # note: seems to be correct for all modes
+simd = ["ndarray", "burn/simd", "burn/default"] # note: seems to be correct for all modes
+tch = ["burn/tch", "dep:cc"] # note: seems to be incorrect for cached mode
+wgpu = ["burn/wgpu"] # note: seems to be correct for all modes
 #
-## yew UI
+## burn extra features
+fusion = ["burn/fusion"] # note: seems to sometimes be counter-productive for speed and/or correctness
+#
+## wasm yew UI
 yew = ["dep:yew", "dep:gloo-timers", "dep:humansize", "dep:indexed_db_futures"]
 
 [lib]
@@ -33,7 +44,8 @@ anyhow = "1.0.0"
 log = "0.4.26"
 pretty_env_logger = "0.5.0"
 safetensors = { version = "0.5.2", default-features = false, features = ["std"] }
-rand = "0.9.0"
+rand = "0.9.1"
+half = "2.6.0"
 #
 ## tokenizer
 candle-core = "0.8.4"
@@ -43,24 +55,24 @@ tokenizers = { version = "0.21.1", default-features = false, features = [
 ] }
 
 [dependencies.burn]
-# version = "0.17.0"
-## 2025-03-28 main
-## using dev because ndarray shows numerical imprecision for cacheless mode in burn 0.16.0
+# version = "0.18.0"
 git = "https://github.com/tracel-ai/burn.git"
-rev = "3bc9c7a4e43365a80a36c38a04dfa40bb21c529d"
+# 2025-05-11 main
+rev = "d361b44954da5991d46ab7fb82f433c3b0612a4f"
 default-features = false
-features = []
 
 [dependencies.burn-mamba]
 git = "https://github.com/swfsql/burn-mamba.git"
-## 2025-04-01 main (0.1.0)
-rev = "9a837401785d80dec30fd16f63c74109da3ae6a7"
+### 2025-05-13 main (0.3.0)
+rev = "0ec064604e2d8513dcb347e04e28f50dd5b010a1"
+default-features = false
 
 ## non-wasm target
-
+#
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 memmap2 = { version = "0.9.0", default-features = false }
-
+cc = { version = "1.2.18", optional = true }
+#
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.hf-hub]
 version = "0.3.2"
 git = "https://github.com/swfsql/hf-hub.git"
@@ -68,8 +80,9 @@ rev = "a411dde1a7ab30d782cb978955b922551fb7eeb1"
 default-features = false
 features = ["online"]
 
-## wasm target
 
+## wasm target
+#
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1.7"
 wasm-bindgen = { version = "0.2.100", features = ["serde-serialize"] }
@@ -86,7 +99,7 @@ yew = { version = "0.21.0", features = ["csr"], optional = true }
 gloo-timers = { version = "0.3.0", features = ["futures"], optional = true }
 humansize = { version = "2.1.3", optional = true }
 indexed_db_futures = { version = "0.4.1", optional = true }
-
+#
 [target.'cfg(target_arch = "wasm32")'.dependencies.hf-hub]
 version = "0.3.2"
 git = "https://github.com/swfsql/hf-hub.git"

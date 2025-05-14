@@ -5,10 +5,12 @@ pub mod yew_ui;
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
+use crate::Precision;
+
 #[cfg(feature = "ndarray")]
-type MyBackend = burn::backend::NdArray<f32, i32>;
+type MyBackend = burn::backend::NdArray<Precision, i32>;
 #[cfg(feature = "wgpu")]
-type MyBackend = burn::backend::Wgpu<f32, i32>;
+type MyBackend = burn::backend::Wgpu<Precision, i32>;
 
 #[wasm_bindgen]
 pub async fn wasm_main() {
