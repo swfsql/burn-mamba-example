@@ -10,31 +10,31 @@ Mamba-1 adapted from [huggingface/candle/mamba-minimal](https://github.com/huggi
 
 - "default" or "empty": nothing is enabled and the "common" mod is exported as a library.
 - Target:
-  - `native`: local executable.
-  - "empty": web console wasm if rustc target is wasm. Can use `yew` for a web wasm UI.
+  - ✅ `native`: local executable.
+  - ✅ "empty": web console wasm if rustc target is wasm. Can use `yew` for a web wasm UI.
 - Model:
-  - `mamba1`: Mamba1 model. For executables, only one can be selected.
-  - `mamba2`: Mamba2 model. For executables, only one can be selected.
+  - ✅ `mamba1`: Mamba1 model. For executables, only one can be selected.
+  - ✅ `mamba2`: Mamba2 model. For executables, only one can be selected.
 - Burn backend:
-  - `ndarray`: used for dev or wasm. Seems entirely correct. Can use `simd` for extra speed.
-  - `wgpu`: for webgpu backend. Seemed entirely correct, now errors when loading the model.
-  - `cuda`: for webgpu backend. Seems entirely correct.
-  - `tch`: for pytorch backend. Seems correct only for cacheless mode (training-friendly).
+  - ✅ `ndarray`: used for dev or wasm. Seems entirely correct. Can use `simd` for extra speed.
+  - ✅ `wgpu`: for webgpu backend. Seems entirely correct.
+  - ✅ `cuda`: for cuda backend. Seems entirely correct.
+  - ⚠️ `tch`: for pytorch backend. Seems correct only for cacheless mode (training-friendly).
 - Extra burn features:
- - `fusion`: enable the fusion feature. Seems counter-productive for correctness and/or speed, you should sanity-check.
+ - ⚠️ `fusion`: enable the fusion feature. Seems counter-productive for correctness and/or speed, you should sanity-check.
 
 Note: Please check Cargo.toml for more info.
 
 #### Performance
 
-Generation speed (cacheless length of 100, cached length of 400) on a RTX 2060:
+Generation speed (single-batch, cacheless length up to 100 and cached length up to 400) on a RTX 2060:
 
-- `native,mamba2,ndarray,simd`: cacheless 29 tk/s; cached 2 tk/s
-- `native,mamba2,wgpu`: `BufferTooBig(154484736)` error when loading the model.
-- `native,mamba2,wgpu,fusion`: `BufferTooBig(154484736)` error when loading the model.
-- `native,mamba2,cuda`: cacheless 248 tk/s; cached 91 tk/s
-- `native,mamba2,cuda,fusion`: cacheless(garbage) 53 tk/s; cached 60 tk/s
-- `native,mamba2,tch`: cacheless 108 tk/s; cached(garbage) 16 tk/s
+- ✅ `native,mamba2,ndarray,simd`: cacheless 13 tk/s; cached 1.4 tk/s
+- ✅ `native,mamba2,wgpu`: cacheless 190 tk/s; cached 35 tk/s.
+- ⚠️ `native,mamba2,wgpu,fusion`: cacheless(garbage) 90 tk/s; cached 32 tk/s.
+- ✅ `native,mamba2,cuda`: cacheless 250 tk/s; cached 60 tk/s
+- ⚠️ `native,mamba2,cuda,fusion`: cacheless(garbage) 69 tk/s; cached 40 tk/s
+- ⚠️ `native,mamba2,tch`: cacheless 113 tk/s; cached(garbage) 17 tk/s
 
 ### Example Outputs
 
