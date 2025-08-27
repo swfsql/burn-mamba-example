@@ -134,7 +134,7 @@ impl<B: Backend> MambaWrapper<B> {
     }
 
     /// Reset and make up to `sample_len - 1` cacheless (training-friendly) calls to generate up to `sample_len - 1` tokens.
-    /// Returns the instant after the first token gets generated.
+    /// Returns how many tokens and the instant after the first token got generated.
     ///
     /// `mamba2_chunk_size`: Chunk size for Mamba2 selective scan. Defaults to 256. No effect for Mamba1.
     pub fn run_cacheless(
@@ -143,7 +143,7 @@ impl<B: Backend> MambaWrapper<B> {
         sample_len: usize,
         logits_processor_config: &mut LogitsProcessorWrapper,
         mamba2_chunk_size: Option<usize>,
-    ) -> anyhow::Result<Option<std::time::Instant>> {
+    ) -> anyhow::Result<(usize, Option<std::time::Instant>)> {
         use std::io::Write;
         let (mut tokens, eos_token) = self.reset_prompt(prompt)?;
         let device = self.mamba.device();
@@ -216,17 +216,17 @@ impl<B: Backend> MambaWrapper<B> {
         if let Some(rest) = self.tokenizer.decode_rest().map_err(anyhow::Error::msg)? {
             print!("{rest}");
         }
-        Ok(instant)
+        Ok((i, instant))
     }
 
     /// Reset and make up to `sample_len - 1` cached (inference-friendly) calls to generate up to `sample_len - 1` tokens.
-    /// Returns the instant after the first token gets generated.
+    /// Returns how many tokens and the instant after the first token got generated.
     pub fn run_cached(
         &mut self,
         prompt: &str,
         sample_len: usize,
         logits_processor_config: &mut LogitsProcessorWrapper,
-    ) -> anyhow::Result<Option<std::time::Instant>> {
+    ) -> anyhow::Result<(usize, Option<std::time::Instant>)> {
         use std::io::Write;
         let (mut tokens, eos_token) = self.reset_prompt(prompt)?;
 
@@ -265,7 +265,7 @@ impl<B: Backend> MambaWrapper<B> {
         if let Some(rest) = self.tokenizer.decode_rest().map_err(anyhow::Error::msg)? {
             print!("{rest}");
         }
-        Ok(instant)
+        Ok((i, instant))
     }
 
     /// Make a cached call to generate a logits.

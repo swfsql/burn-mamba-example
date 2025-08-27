@@ -35,11 +35,10 @@ fn main() -> anyhow::Result<()> {
     let sample_len = 10;
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
     let chunk_size = 4;
-    let start = models
-        .run_cacheless("Mamba is the", sample_len, &mut processor, Some(chunk_size))?
-        .unwrap();
+    let (sample_len, start) = models
+        .run_cacheless("Mamba is the", sample_len, &mut processor, Some(chunk_size))?;
     println!();
-    let elapsed = start.elapsed().as_millis();
+    let elapsed = start.unwrap().elapsed().as_millis();
     let total_sample_len = (1 + sample_len) * sample_len / 2;
     info!(
         "mamba model generated {total_sample_len} total tokens in {}ms ({} token/s)",
@@ -50,11 +49,10 @@ fn main() -> anyhow::Result<()> {
     info!("running cached (inference-friendly)");
     let sample_len = 40;
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
-    let start = models
-        .run_cached("Mamba is the", sample_len, &mut processor)?
-        .unwrap();
+    let (sample_len, start) = models
+        .run_cached("Mamba is the", sample_len, &mut processor)?;
     println!();
-    let elapsed = start.elapsed().as_millis();
+    let elapsed = start.unwrap().elapsed().as_millis();
     info!(
         "mamba model generated {sample_len} tokens in {}ms ({} token/s)",
         elapsed,
