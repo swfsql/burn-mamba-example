@@ -17,12 +17,24 @@ Mamba-1 adapted from [huggingface/candle/mamba-minimal](https://github.com/huggi
   - `mamba2`: Mamba2 model. For executables, only one can be selected.
 - Burn backend:
   - `ndarray`: used for dev or wasm. Seems entirely correct. Can use `simd` for extra speed.
+  - `wgpu`: for webgpu backend. Seemed entirely correct, now errors when loading the model.
+  - `cuda`: for webgpu backend. Seems entirely correct.
   - `tch`: for pytorch backend. Seems correct only for cacheless mode (training-friendly).
-  - `wgpu`: for webgpu backend. Seems entirely correct.
 - Extra burn features:
  - `fusion`: enable the fusion feature. Seems counter-productive for correctness and/or speed, you should sanity-check.
 
 Note: Please check Cargo.toml for more info.
+
+#### Performance
+
+Generation speed (cacheless length of 100, cached length of 400) on a RTX 2060:
+
+- `native,mamba2,ndarray,simd`: cacheless 29 tk/s; cached 2 tk/s
+- `native,mamba2,wgpu`: `BufferTooBig(154484736)` error when loading the model.
+- `native,mamba2,wgpu,fusion`: `BufferTooBig(154484736)` error when loading the model.
+- `native,mamba2,cuda`: cacheless 248 tk/s; cached 91 tk/s
+- `native,mamba2,cuda,fusion`: cacheless(garbage) 53 tk/s; cached 60 tk/s
+- `native,mamba2,tch`: cacheless 108 tk/s; cached(garbage) 16 tk/s
 
 ### Example Outputs
 

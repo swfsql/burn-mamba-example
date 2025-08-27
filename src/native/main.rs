@@ -10,12 +10,15 @@ use hf_hub::{
 };
 use log::info;
 
+// check README for generation speeds
 #[cfg(feature = "ndarray")]
 type MyBackend = burn::backend::NdArray<Precision, i32>;
-#[cfg(feature = "tch")]
-type MyBackend = burn::backend::LibTorch<Precision, i8>;
 #[cfg(feature = "wgpu")]
 type MyBackend = burn::backend::Wgpu<Precision, i32>;
+#[cfg(feature = "cuda")]
+type MyBackend = burn::backend::Cuda<Precision, i32>;
+#[cfg(feature = "tch")]
+type MyBackend = burn::backend::LibTorch<Precision, i8>;
 
 fn main() -> anyhow::Result<()> {
     let () = pretty_env_logger::formatted_timed_builder()
@@ -28,19 +31,28 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "mamba2")]
     let mut models = models_mamba2::<MyBackend>()?;
 
-    let start = std::time::Instant::now();
     info!("running cacheless (training-friendly)");
+    let sample_len = 10;
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
     let chunk_size = 4;
-    models.run_cacheless("Mamba is the", 10, &mut processor, Some(chunk_size))?;
+    let start = models
+        .run_cacheless("Mamba is the", sample_len, &mut processor, Some(chunk_size))?
+        .unwrap();
     println!();
-    info!("ran in {}ms", start.elapsed().as_millis());
+    let elapsed = start.elapsed().as_millis();
+    let total_sample_len = (1 + sample_len) * sample_len / 2;
+    info!(
+        "mamba model generated {total_sample_len} total tokens in {}ms ({} token/s)",
+        elapsed,
+        (total_sample_len * 1000) as f32 / elapsed as f32
+    );
 
-    let start = std::time::Instant::now();
-    let sample_len = 40;
     info!("running cached (inference-friendly)");
+    let sample_len = 40;
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
-    models.run_cached("Mamba is the", sample_len, &mut processor)?;
+    let start = models
+        .run_cached("Mamba is the", sample_len, &mut processor)?
+        .unwrap();
     println!();
     let elapsed = start.elapsed().as_millis();
     info!(

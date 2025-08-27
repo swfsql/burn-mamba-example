@@ -8,6 +8,7 @@ edition = "2024"
 default = [] # by default just re-exports common/ as a library
 # default = ["native", "ndarray", "mamba2"] # for native dev
 # default = ["native", "wgpu", "mamba2"] # for native wgpu
+# default = ["native", "cuda", "mamba2"] # for native cuda
 # default = ["native", "tch", "mamba2"] # for native torch
 # default = ["ndarray", "mamba2"] # for wasm web-console dev - also check .cargo/config.toml
 # default = ["ndarray", "yew", "mamba2"] # for wasm + web-yew dev - also check .cargo/config.toml
@@ -19,14 +20,15 @@ mamba2 = ["burn-mamba/mamba2"]
 ## binary from src/native/main.rs
 native = []
 #
-## burn backend
-ndarray = ["burn/ndarray"] # note: seems to be correct for all modes
-simd = ["ndarray", "burn/simd", "burn/default"] # note: seems to be correct for all modes
-tch = ["burn/tch", "dep:cc"] # note: seems to be incorrect for cached mode
-wgpu = ["burn/wgpu"] # note: seems to be correct for all modes
+## burn backend - check README for more info
+ndarray = ["burn/ndarray"]
+simd = ["ndarray", "burn/simd", "burn/default"]
+tch = ["burn/tch", "dep:cc"]
+wgpu = ["burn/wgpu"]
+cuda = ["burn/cuda"]
 #
-## burn extra features
-fusion = ["burn/fusion"] # note: seems to sometimes be counter-productive for speed and/or correctness
+## burn extra features - check README for more info
+fusion = ["burn/fusion"]
 #
 ## wasm yew UI
 yew = ["dep:yew", "dep:gloo-timers", "dep:humansize", "dep:indexed_db_futures"]
@@ -44,7 +46,7 @@ anyhow = "1.0.0"
 log = "0.4.26"
 pretty_env_logger = "0.5.0"
 safetensors = { version = "0.5.2", default-features = false, features = ["std"] }
-rand = "0.9.1"
+rand = "0.9.2"
 half = "2.6.0"
 #
 ## tokenizer
@@ -55,16 +57,16 @@ tokenizers = { version = "0.21.1", default-features = false, features = [
 ] }
 
 [dependencies.burn]
-# version = "0.18.0"
+# version = "0.19.0"
 git = "https://github.com/tracel-ai/burn.git"
-# 2025-05-11 main
-rev = "d361b44954da5991d46ab7fb82f433c3b0612a4f"
+# 2025-08-27 main
+rev = "adacb4178e92da62144badfbcbd5013ecefe33a0"
 default-features = false
 
 [dependencies.burn-mamba]
 git = "https://github.com/swfsql/burn-mamba.git"
-### 2025-05-13 main (0.3.0)
-rev = "0ec064604e2d8513dcb347e04e28f50dd5b010a1"
+### 2025-08-27 main (0.3.0)
+rev = "2a2d243805dfa5920da564c29077e690048879b1"
 default-features = false
 
 ## non-wasm target

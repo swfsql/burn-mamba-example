@@ -134,6 +134,7 @@ impl<B: Backend> MambaWrapper<B> {
     }
 
     /// Reset and make up to `sample_len - 1` cacheless (training-friendly) calls to generate up to `sample_len - 1` tokens.
+    /// Returns the instant after the first token gets generated.
     ///
     /// `mamba2_chunk_size`: Chunk size for Mamba2 selective scan. Defaults to 256. No effect for Mamba1.
     pub fn run_cacheless(
@@ -142,7 +143,7 @@ impl<B: Backend> MambaWrapper<B> {
         sample_len: usize,
         logits_processor_config: &mut LogitsProcessorWrapper,
         mamba2_chunk_size: Option<usize>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<std::time::Instant>> {
         use std::io::Write;
         let (mut tokens, eos_token) = self.reset_prompt(prompt)?;
         let device = self.mamba.device();
@@ -155,12 +156,17 @@ impl<B: Backend> MambaWrapper<B> {
         }
         std::io::stdout().flush()?;
 
+        let mut instant = None;
         let mut i = 0;
         'outer: while i < sample_len {
             let input: Tensor<B, 1, Int> = Tensor::from_data(tokens.as_slice(), &device);
             let input = input.unsqueeze();
 
             let logits_list = self.mamba.forward(input, mamba2_chunk_size);
+            if i == 0 {
+                instant = Some(std::time::Instant::now());
+            }
+
             let full_shape = logits_list.dims();
             let shape = (full_shape[2],);
 
@@ -210,16 +216,17 @@ impl<B: Backend> MambaWrapper<B> {
         if let Some(rest) = self.tokenizer.decode_rest().map_err(anyhow::Error::msg)? {
             print!("{rest}");
         }
-        Ok(())
+        Ok(instant)
     }
 
     /// Reset and make up to `sample_len - 1` cached (inference-friendly) calls to generate up to `sample_len - 1` tokens.
+    /// Returns the instant after the first token gets generated.
     pub fn run_cached(
         &mut self,
         prompt: &str,
         sample_len: usize,
         logits_processor_config: &mut LogitsProcessorWrapper,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<std::time::Instant>> {
         use std::io::Write;
         let (mut tokens, eos_token) = self.reset_prompt(prompt)?;
 
@@ -233,9 +240,13 @@ impl<B: Backend> MambaWrapper<B> {
 
         let mut caches = self.empty_caches(1)?;
 
+        let mut instant = None;
         let mut i = 0;
         while i < sample_len {
             let next_logits = self.step(tokens[i], Some(&mut caches))?;
+            if i == 0 {
+                instant = Some(std::time::Instant::now());
+            }
             let next_token = logits_processor_config.add_logits(i, &mut tokens, next_logits)?;
             if next_token == eos_token {
                 break;
@@ -254,7 +265,7 @@ impl<B: Backend> MambaWrapper<B> {
         if let Some(rest) = self.tokenizer.decode_rest().map_err(anyhow::Error::msg)? {
             print!("{rest}");
         }
-        Ok(())
+        Ok(instant)
     }
 
     /// Make a cached call to generate a logits.
