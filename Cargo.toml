@@ -64,10 +64,9 @@ rev = "d7e1b08cab5bcfad76923bed0262a76a96341aeb"
 default-features = false
 
 [dependencies.burn-mamba]
-path = "../burn-mamba"
-#git = "https://github.com/swfsql/burn-mamba.git"
-### 2025-10-20 main (0.3.0)
-#rev = "01ab28c76e8e4f183ddf1ee05faf75ac43812782"
+git = "https://github.com/swfsql/burn-mamba.git"
+## 2025-10-20 main (0.3.0)
+rev = "01ab28c76e8e4f183ddf1ee05faf75ac43812782"
 default-features = false
 
 ## non-wasm target
