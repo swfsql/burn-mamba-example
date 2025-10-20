@@ -1,6 +1,6 @@
 [package]
 name = "burn-mamba-example"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [features]
@@ -43,7 +43,7 @@ required-features = ["native"]
 
 [dependencies]
 anyhow = "1.0.0"
-log = "0.4.26"
+log = "0.4.28"
 pretty_env_logger = "0.5.0"
 safetensors = { version = "0.5.2", default-features = false, features = ["std"] }
 rand = "0.9.2"
@@ -59,14 +59,15 @@ tokenizers = { version = "0.21.1", default-features = false, features = [
 [dependencies.burn]
 # version = "0.19.0"
 git = "https://github.com/tracel-ai/burn.git"
-# 2025-08-27 main
-rev = "adacb4178e92da62144badfbcbd5013ecefe33a0"
+# 2025-10-20 main
+rev = "d7e1b08cab5bcfad76923bed0262a76a96341aeb"
 default-features = false
 
 [dependencies.burn-mamba]
-git = "https://github.com/swfsql/burn-mamba.git"
-### 2025-08-27 main (0.3.0)
-rev = "2a2d243805dfa5920da564c29077e690048879b1"
+path = "../burn-mamba"
+#git = "https://github.com/swfsql/burn-mamba.git"
+### 2025-10-20 main (0.3.0)
+#rev = "01ab28c76e8e4f183ddf1ee05faf75ac43812782"
 default-features = false
 
 ## non-wasm target

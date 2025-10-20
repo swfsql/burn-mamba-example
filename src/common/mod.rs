@@ -393,7 +393,7 @@ pub enum MambaBlockCaches<B: Backend> {
     #[cfg(feature = "mamba1")]
     Mamba1(Vec<mamba1_block::step::Mamba1BlockCache<B>>),
     #[cfg(feature = "mamba2")]
-    Mamba2(Vec<mamba2_block::step::Mamba2BlockCache<B>>),
+    Mamba2(Vec<mamba2_block::Mamba2BlockCache<B>>),
 }
 
 #[cfg(any(feature = "mamba1", feature = "mamba2"))]
@@ -428,7 +428,10 @@ impl<B: Backend> MambaModel<B> {
             #[cfg(feature = "mamba1")]
             Self::Mamba1(m) => m.forward(x),
             #[cfg(feature = "mamba2")]
-            Self::Mamba2(m) => m.forward(x, mamba2_chunk_size),
+            Self::Mamba2(m) => {
+                let (y, _cache) = m.forward(x, mamba2_chunk_size);
+                y
+            }
         };
         let _mamba2_chunk_size = mamba2_chunk_size;
         res
@@ -529,7 +532,7 @@ impl<B: Backend> MambaBlockCaches<B> {
                 let len = config.n_layer;
                 let mut caches = Vec::with_capacity(len);
                 for _ in 0..len {
-                    let cache = mamba2_block::step::Mamba2BlockCacheConfig::new(
+                    let cache = mamba2_block::Mamba2BlockCacheConfig::new(
                         batch,
                         config.mamba_block.clone(),
                     )

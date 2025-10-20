@@ -34,9 +34,9 @@ fn main() -> anyhow::Result<()> {
     info!("running cacheless (training-friendly)");
     let sample_len = 10;
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
-    let chunk_size = 4;
-    let (sample_len, start) = models
-        .run_cacheless("Mamba is the", sample_len, &mut processor, Some(chunk_size))?;
+    let chunk_size = 8;
+    let (sample_len, start) =
+        models.run_cacheless("Mamba is the", sample_len, &mut processor, Some(chunk_size))?;
     println!();
     let elapsed = start.unwrap().elapsed().as_millis();
     let total_sample_len = (1 + sample_len) * sample_len / 2;
@@ -49,8 +49,7 @@ fn main() -> anyhow::Result<()> {
     info!("running cached (inference-friendly)");
     let sample_len = 40;
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
-    let (sample_len, start) = models
-        .run_cached("Mamba is the", sample_len, &mut processor)?;
+    let (sample_len, start) = models.run_cached("Mamba is the", sample_len, &mut processor)?;
     println!();
     let elapsed = start.unwrap().elapsed().as_millis();
     info!(
