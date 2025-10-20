@@ -1,7 +1,7 @@
 {
   "name": "burn-mamba-example",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "files": [
     "burn_mamba_example_bg.wasm",
     "burn_mamba_example.js",
