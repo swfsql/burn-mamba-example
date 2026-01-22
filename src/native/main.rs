@@ -13,12 +13,16 @@ use log::info;
 // check README for generation speeds
 #[cfg(feature = "ndarray")]
 type MyBackend = burn::backend::NdArray<Precision, i32>;
+#[cfg(feature = "cpu")]
+type MyBackend = burn::backend::Cpu<Precision, i32>;
+#[cfg(feature = "tch")]
+type MyBackend = burn::backend::LibTorch<Precision, i32>;
 #[cfg(feature = "wgpu")]
 type MyBackend = burn::backend::Wgpu<Precision, i32>;
+#[cfg(feature = "vulkan")]
+type MyBackend = burn::backend::Vulkan<Precision, i32>;
 #[cfg(feature = "cuda")]
 type MyBackend = burn::backend::Cuda<Precision, i32>;
-#[cfg(feature = "tch")]
-type MyBackend = burn::backend::LibTorch<Precision, i8>;
 
 fn main() -> anyhow::Result<()> {
     let () = pretty_env_logger::formatted_timed_builder()
@@ -32,7 +36,7 @@ fn main() -> anyhow::Result<()> {
     let mut models = models_mamba2::<MyBackend>()?;
 
     info!("running cacheless (training-friendly)");
-    let sample_len = 10;
+    let sample_len = 20;
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
     let chunk_size = 8;
     let (sample_len, start) =
@@ -47,7 +51,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     info!("running cached (inference-friendly)");
-    let sample_len = 40;
+    let sample_len = 80;
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
     let (sample_len, start) = models.run_cached("Mamba is the", sample_len, &mut processor)?;
     println!();

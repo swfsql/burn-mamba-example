@@ -145,7 +145,8 @@ pub fn safetensors_load_mamba2<B: Backend>(
     )?;
 
     for i in 0..24 {
-        let layer = &mut mamba.layers[i];
+        // note: only real layers are used
+        let layer = &mut mamba.layers.real_layers[i];
         let name = |n: &str| format!("backbone.layers.{i}.{n}");
         load_param_f16_to_f32(
             &mut layer.norm.gamma,

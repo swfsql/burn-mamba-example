@@ -1,6 +1,6 @@
 [package]
 name = "burn-mamba-example"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 
 [features]
@@ -22,13 +22,16 @@ native = []
 #
 ## burn backend - check README for more info
 ndarray = ["burn/ndarray"]
-simd = ["ndarray", "burn/simd", "burn/default"]
+simd = ["ndarray", "burn/simd"]
+cpu = ["burn/cpu"]
 tch = ["burn/tch", "dep:cc"]
 wgpu = ["burn/wgpu"]
+vulkan = ["burn/vulkan"]
 cuda = ["burn/cuda"]
 #
 ## burn extra features - check README for more info
 fusion = ["burn/fusion"]
+autotune = ["burn/autotune"]
 #
 ## wasm yew UI
 yew = ["dep:yew", "dep:gloo-timers", "dep:humansize", "dep:indexed_db_futures"]
@@ -56,24 +59,19 @@ tokenizers = { version = "0.21.1", default-features = false, features = [
     "unstable_wasm",
 ] }
 
-[dependencies.burn]
-# version = "0.19.0"
-git = "https://github.com/tracel-ai/burn.git"
-# 2025-10-20 main
-rev = "d7e1b08cab5bcfad76923bed0262a76a96341aeb"
-default-features = false
+### For the main branch. ###
+burn = { version = "0.20.0", default-features = false }
+burn-mamba = { git = "https://github.com/swfsql/burn-mamba.git", default-features = false, rev = "868c5eb6b51375ca6eb6e07a14cd44b35fd57479" }
 
-[dependencies.burn-mamba]
-git = "https://github.com/swfsql/burn-mamba.git"
-## 2025-10-20 main (0.3.0)
-rev = "01ab28c76e8e4f183ddf1ee05faf75ac43812782"
-default-features = false
+### For local development. ###
+# burn = { path = "../burn/crates/burn", default-features = false }
+# burn-mamba = { path = "../burn-mamba", default-features = false }
 
 ## non-wasm target
 #
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 memmap2 = { version = "0.9.0", default-features = false }
-cc = { version = "1.2.18", optional = true }
+cc = { version = "1.2.43", optional = true }
 #
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.hf-hub]
 version = "0.3.2"

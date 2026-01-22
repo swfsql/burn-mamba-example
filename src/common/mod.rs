@@ -2,12 +2,12 @@ mod safetensors_load;
 pub mod token_output_stream;
 
 #[cfg(feature = "mamba1")]
-use burn_mamba::{mamba1, mamba1_block};
+use burn_mamba::mamba1;
 #[cfg(feature = "mamba1")]
 pub use safetensors_load::safetensors_load_mamba1;
 
 #[cfg(feature = "mamba2")]
-use burn_mamba::{mamba2, mamba2_block};
+use burn_mamba::mamba2;
 #[cfg(feature = "mamba2")]
 pub use safetensors_load::safetensors_load_mamba2;
 
@@ -129,7 +129,7 @@ impl<B: Backend> MambaWrapper<B> {
     /// Initializes a list of empty (zero, null) [burn_mamba::step::MambaBlockCache] for a cached run.
     pub fn empty_caches(&self, batch: usize) -> anyhow::Result<MambaBlockCaches<B>> {
         let device = self.mamba.device();
-        let caches = MambaBlockCaches::empty_caches(batch, &self.mamba_config, &device);
+        let caches = MambaBlockCaches::<B>::empty_caches(batch, &self.mamba_config, &device);
         Ok(caches)
     }
 
@@ -391,9 +391,9 @@ pub enum MambaModelConfig {
 #[derive(Clone, Debug)]
 pub enum MambaBlockCaches<B: Backend> {
     #[cfg(feature = "mamba1")]
-    Mamba1(Vec<mamba1_block::step::Mamba1BlockCache<B>>),
+    Mamba1(mamba1::Mamba1BlockCaches<B>),
     #[cfg(feature = "mamba2")]
-    Mamba2(Vec<mamba2_block::Mamba2BlockCache<B>>),
+    Mamba2(mamba2::Mamba2BlockCaches<B>),
 }
 
 #[cfg(any(feature = "mamba1", feature = "mamba2"))]
@@ -419,7 +419,7 @@ impl<B: Backend> MambaModel<B> {
             #[cfg(feature = "mamba1")]
             Self::Mamba1(m) => m.layers.len(),
             #[cfg(feature = "mamba2")]
-            Self::Mamba2(m) => m.layers.len(),
+            Self::Mamba2(m) => m.layers.n_real_layers,
         }
     }
     /// `mamba2_chunk_size`: Chunk size for Mamba2 selective scan. Defaults to 256. No effect for Mamba1.
@@ -429,7 +429,8 @@ impl<B: Backend> MambaModel<B> {
             Self::Mamba1(m) => m.forward(x),
             #[cfg(feature = "mamba2")]
             Self::Mamba2(m) => {
-                let (y, _cache) = m.forward(x, mamba2_chunk_size);
+                // note: this always from the start, from empty caches
+                let (y, _cache) = m.forward(x, None, mamba2_chunk_size);
                 y
             }
         };
@@ -457,7 +458,7 @@ impl<B: Backend> MambaModel<B> {
                 let MambaBlockCaches::Mamba2(caches) = caches else {
                     unreachable!()
                 };
-                let (logits, new_caches) = m.step(x, caches.clone());
+                let (logits, new_caches) = m.step(x, Some(caches.clone()));
                 let new_caches = MambaBlockCaches::Mamba2(new_caches);
                 (logits, new_caches)
             }
@@ -512,16 +513,12 @@ impl<B: Backend> MambaBlockCaches<B> {
                 let MambaModelConfig::Mamba1(config) = mamba_config else {
                     unreachable!()
                 };
-                let len = config.n_layer;
-                let mut caches = Vec::with_capacity(len);
-                for _ in 0..len {
-                    let cache = mamba1_block::step::Mamba1BlockCacheConfig::new(
-                        batch,
-                        config.mamba_block.clone(),
-                    )
-                    .init::<B>(&device);
-                    caches.push(cache);
-                }
+                let caches = mamba1::Mamba1BlockCachesConfig::new_from_block_config(
+                    config.n_layer,
+                    batch,
+                    config.mamba_block.clone(),
+                )
+                .init(device);
                 MambaBlockCaches::Mamba1(caches)
             }
             #[cfg(feature = "mamba2")]
@@ -529,16 +526,13 @@ impl<B: Backend> MambaBlockCaches<B> {
                 let MambaModelConfig::Mamba2(config) = mamba_config else {
                     unreachable!()
                 };
-                let len = config.n_layer;
-                let mut caches = Vec::with_capacity(len);
-                for _ in 0..len {
-                    let cache = mamba2_block::Mamba2BlockCacheConfig::new(
-                        batch,
-                        config.mamba_block.clone(),
-                    )
-                    .init::<B>(&device);
-                    caches.push(cache);
-                }
+                let caches = mamba2::Mamba2BlockCachesConfig::new_from_block_config(
+                    config.n_real_layers,
+                    None,
+                    batch,
+                    config.mamba_block.clone(),
+                )
+                .init(device);
                 MambaBlockCaches::Mamba2(caches)
             }
         }
