@@ -16,31 +16,42 @@ Mamba-1 adapted from [huggingface/candle/mamba-minimal](https://github.com/huggi
   - ✅ `mamba1`: Mamba1 model. For executables, only one can be selected.
   - ✅ `mamba2`: Mamba2 model. For executables, only one can be selected.
 - Burn backend:
-  - ✅ `ndarray`: used for dev or wasm. Seems entirely correct. Can use `simd` for extra speed.
-  - ✅ `wgpu`: for webgpu backend. Seems entirely correct.
-  - ✅ `cuda`: for cuda backend. Seems entirely correct.
-  - ⚠️ `tch`: for pytorch backend. Seems correct only for cacheless mode (training-friendly).
+  - ✅ `ndarray`: used for dev or wasm. Correct for both sequential and parallel modes. Can use `simd` for extra speed.
+  - ⚠️ `cpu`: for cpu backend. Correct for both sequential and parallel modes. May stack overflow.
+  - ⚠️ `wgpu`: for webgpu backend. Wrong for both sequential and parallel modes.
+  - ✅ `cuda`: for cuda backend. Correct for both sequential and parallel modes.
+  - ⚠️ `tch`: for pytorch backend. Correct only for parallel mode (training-friendly).
 - Extra burn features:
- - ⚠️ `fusion`: enable the fusion feature. Seems counter-productive for correctness and/or speed, you should sanity-check.
+ - ✅ `fusion`: enable the fusion feature. May be counter-productive for some cases.
+ - ✅ `autotune`: enable the autotune feature. May be counter-productive for some cases.
 
 Note: Please check Cargo.toml for more info.
 
 #### Performance
 
-Generation speed (single-batch, cacheless length up to 100 and cached length up to 400) on a RTX 2060:
+Native generation speed:
+- Device: 2 CPU threads, RTX 2060.
+- Configuration: Single batch, params in f32, Mamba1 sequence and parallel lengths both up to 91 tokens, Mamba2 sequence and parallel lengths up to 100 and 257.
+- The results are standard/+fusion/+autotune/-fusion, in token/s.
 
-- ✅ `native,mamba2,ndarray,simd`: cacheless 13 tk/s; cached 1.4 tk/s
-- ✅ `native,mamba2,wgpu`: cacheless 190 tk/s; cached 35 tk/s.
-- ⚠️ `native,mamba2,wgpu,fusion`: cacheless(garbage) 90 tk/s; cached 32 tk/s.
-- ✅ `native,mamba2,cuda`: cacheless 250 tk/s; cached 60 tk/s
-- ⚠️ `native,mamba2,cuda,fusion`: cacheless(garbage) 69 tk/s; cached 40 tk/s
-- ⚠️ `native,mamba2,tch`: cacheless 113 tk/s; cached(garbage) 17 tk/s
+| Model | Backend | Sequental tk/s | Parallel tk/s |
+| ----: | ------: | :------------- | :------------ |
+| Mamba1 | NdArray+Simd | *`1.7`*✅/`---`✅/`---`✅/`---`✅ | *`029`*✅/`---`✅/`---`✅/`---`✅ |
+| Mamba1 | Cpu | `1.2`✅/`err`⚠️/`err`⚠️/*`1.4`*✅ | *`2.1`*✅/`err`⚠️/`err`⚠️/`0.0`⚠️ |
+| Mamba1 | Wpgu | `028`⚠️/`020`⚠️/`020`⚠️/`028`⚠️ | `279`⚠️/`140`⚠️/`139`⚠️/`269`⚠️ |
+| Mamba1 | Cuda | `031`✅/`016`✅/`019`✅/*`042`*✅ | *`256`*✅/`093`✅/`077`✅/`216`✅ |
+| Mamba1 | Tch/cpu | `011`⚠️/`---`⚠️/`---`⚠️/`---`⚠️ | `0.0`⚠️|`---`⚠️/`---`⚠️/`---`⚠️ |
+| Mamba2 | NdArray+Simd | *`1.8`*✅/`---`✅/`---`✅/`---`✅ | *`033`*✅/`---`✅/`---`✅/`---`✅ |
+| Mamba2 | Cpu | *`1.6`*✅/`err`⚠️/`err`⚠️/`1.3`✅ | `0.0`⚠️/`err`⚠️/`err`⚠️/`0.0`⚠️ |
+| Mamba2 | Wpgu | `027`⚠️/`024`⚠️/`025`⚠️/`027`⚠️ | `218`⚠️/`118`⚠️/`229`⚠️/`278`⚠️ |
+| Mamba2 | Cuda | *`040`*✅/`021`✅/`022`✅/*`040`*✅ | *`153`*✅/`128`✅/`113`✅/`145`✅ |
+| Mamba2 | Tch/cpu | `err`⚠️/`---`⚠️/`---`⚠️/`---`⚠️ | *`040`*✅/`---`✅/`---`✅/`---`✅ |
 
 ### Example Outputs
 
-To test for correctness for some backend, I recommend first checking `native`, if cacheless matches against cached, and optionally if they match against the `ndarray` backend. Then even if they don't match, you can guess if the results are sensible, that they return coeherent tokens, don't cause panics, etc.
+To test for correctness for some backend, I recommend first checking `native`, if sequential matches against parallel, and optionally if they match against the `ndarray` backend. Then even if they don't match, you can guess if the results are sensible, that they return coeherent tokens, don't cause panics, etc.
 
-The following are my results from different backends (native ndarray, native wgpu + cuda, wasm ndarray), with cacheless and cached always matching.
+The following are my results from different backends (native ndarray, native wgpu + cuda, wasm ndarray), with sequential and parallel always matching.
 
 Mamba1:
 ```
@@ -60,7 +71,7 @@ RUSTFLAGS="-C target-cpu=native"
 cargo run --release --no-default-features --features "native,wgpu,mamba2"
 ```
 Notes:
-- This will automatically download model weights, load and run them, first in cacheless mode and then in cached mode.
+- This will automatically download model weights, load and run them, first in sequential mode and then in parallel mode.
 
 ##### WASM
 
@@ -74,7 +85,7 @@ wasm-pack build --release --target web --out-dir "frontend/mamba1/pkg" \
 miniserve -i 127.0.0.1 "frontend/"
 ```
 Then open the page at [http://127.0.0.1:8080/mamba1/index.html](http://127.0.0.1:8080/mamba1/index.html) and open the console logs.
-Note: This will automatically download model weights, load and run them, first in cacheless mode and then in cached mode, similarly to the native console one.
+Note: This will automatically download model weights, load and run them, first in sequential mode and then in parallel mode, similarly to the native console one.
 
 #### Web Mamba2 (Yew UI)
 
@@ -85,7 +96,7 @@ miniserve -i 127.0.0.1 "frontend/"
 ```
 Then open the page at [http://127.0.0.1:8080/mamba2/index.html](http://127.0.0.1:8080/mamba2/index.html).
 Nots:
-- This won't download anything by default, and you must click buttons to download, load and run the model - which is run in cached mode.
+- This won't download anything by default, and you must click buttons to download, load and run the model - which is run in sequential mode.
 - `wasm-opt` is disabled for `yew` with `wasm-pack build --no-opt`.
 
 ### Dev

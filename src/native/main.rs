@@ -16,7 +16,7 @@ type MyBackend = burn::backend::NdArray<Precision, i32>;
 #[cfg(feature = "cpu")]
 type MyBackend = burn::backend::Cpu<Precision, i32>;
 #[cfg(feature = "tch")]
-type MyBackend = burn::backend::LibTorch<Precision, i32>;
+type MyBackend = burn::backend::LibTorch<Precision>;
 #[cfg(feature = "wgpu")]
 type MyBackend = burn::backend::Wgpu<Precision, i32>;
 #[cfg(feature = "vulkan")]
@@ -35,12 +35,24 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "mamba2")]
     let mut models = models_mamba2::<MyBackend>()?;
 
-    info!("running cacheless (training-friendly)");
+    info!("running in sequential mode (inference-friendly)");
+    let sample_len = 80;
+    let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
+    let (sample_len, start) = models.run_sequential("Mamba is the", sample_len, &mut processor)?;
+    println!();
+    let elapsed = start.unwrap().elapsed().as_millis();
+    info!(
+        "mamba model generated {sample_len} tokens in {}ms ({} token/s)",
+        elapsed,
+        (sample_len * 1000) as f32 / elapsed as f32
+    );
+
+    info!("running in parallel mode (training-friendly)");
     let sample_len = 20;
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
     let chunk_size = 8;
     let (sample_len, start) =
-        models.run_cacheless("Mamba is the", sample_len, &mut processor, Some(chunk_size))?;
+        models.run_parallel("Mamba is the", sample_len, &mut processor, Some(chunk_size))?;
     println!();
     let elapsed = start.unwrap().elapsed().as_millis();
     let total_sample_len = (1 + sample_len) * sample_len / 2;
@@ -50,25 +62,13 @@ fn main() -> anyhow::Result<()> {
         (total_sample_len * 1000) as f32 / elapsed as f32
     );
 
-    info!("running cached (inference-friendly)");
-    let sample_len = 80;
-    let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
-    let (sample_len, start) = models.run_cached("Mamba is the", sample_len, &mut processor)?;
-    println!();
-    let elapsed = start.unwrap().elapsed().as_millis();
-    info!(
-        "mamba model generated {sample_len} tokens in {}ms ({} token/s)",
-        elapsed,
-        (sample_len * 1000) as f32 / elapsed as f32
-    );
-
     info!("finished (success)");
     Ok(())
 }
 
 #[cfg(feature = "mamba1")]
 fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
-    use burn_mamba::{mamba1, mamba1_block};
+    use burn_mamba::mamba1;
     use burn_mamba_example::safetensors_load_mamba1;
 
     let start = std::time::Instant::now();
@@ -107,11 +107,11 @@ fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
         let f = std::fs::File::open(mamba_filename)?;
         unsafe { memmap2::MmapOptions::new().map(&f)? }
     };
-    let mamba_config = mamba1::Mamba1Config::new(
+    let mamba_config = mamba1::Mamba1NetworkConfig::new(
         hf::mamba1_130m::N_LAYER,
         hf::mamba1_130m::VOCAB_SIZE,
         hf::mamba1_130m::PAD_VOCAB_SIZE_MULTIPLE,
-        mamba1_block::Mamba1BlockConfig::new(hf::mamba1_130m::D_MODEL),
+        mamba1::Mamba1Config::new(hf::mamba1_130m::D_MODEL),
         true,
     );
     let mamba =
@@ -129,7 +129,7 @@ fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
 
 #[cfg(feature = "mamba2")]
 fn models_mamba2<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
-    use burn_mamba::{mamba2, mamba2_block};
+    use burn_mamba::mamba2;
     use burn_mamba_example::safetensors_load_mamba2;
 
     let start = std::time::Instant::now();
@@ -169,12 +169,21 @@ fn models_mamba2<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
             let f = std::fs::File::open(mamba_filename)?;
             unsafe { memmap2::MmapOptions::new().map(&f)? }
         };
-        let mamba_config = mamba2::Mamba2Config::new(
-            hf::mamba2_130m::N_LAYER,
-            hf::mamba2_130m::VOCAB_SIZE,
-            hf::mamba2_130m::PAD_VOCAB_SIZE_MULTIPLE,
-            mamba2_block::Mamba2BlockConfig::new(hf::mamba2_130m::D_MODEL)
-                .with_is_norm_before_gate(false),
+        let mamba_config = mamba2::Mamba2NetworkConfig::new(
+            hf::mamba2_130m::N_LAYER,                 // 24
+            hf::mamba2_130m::VOCAB_SIZE,              // 50277
+            hf::mamba2_130m::PAD_VOCAB_SIZE_MULTIPLE, // 16
+            mamba2::Mamba2Config::new(
+                hf::mamba2_130m::D_MODEL, // 768
+            )
+            .with_d_state(128) // default
+            .with_d_conv(4) // default
+            .with_expand(2) // default
+            .with_headdim(64) // default; n_heads = 768*2/64 = 24
+            .with_ngroups(1) // default
+            .with_is_norm_before_gate(false)
+            .with_has_proj_bias(false) // default
+            .with_has_conv_bias(true), // default
             true,
         );
         let mamba =

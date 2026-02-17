@@ -21,7 +21,7 @@ pub async fn run<B: Backend>() -> anyhow::Result<()> {
     let mut last_elapsed = timing.elapsed().as_millis();
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
 
-    // cached run
+    // sequential run
     let mut i: usize = 0;
     {
         let (mut tokens, eos_token) = models.reset_prompt(prompt)?;
@@ -80,7 +80,7 @@ pub async fn run<B: Backend>() -> anyhow::Result<()> {
 #[cfg(feature = "mamba1")]
 pub async fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
     use crate::safetensors_load_mamba1;
-    use burn_mamba::{mamba1, mamba1_block};
+    use burn_mamba::mamba1;
 
     let api = Api::new().await?;
 
@@ -134,11 +134,11 @@ pub async fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
 
     let device: B::Device = Default::default();
 
-    let mamba_config = mamba1::Mamba1Config::new(
+    let mamba_config = mamba1::Mamba1NetworkConfig::new(
         hf::mamba1_130m::N_LAYER,
         hf::mamba1_130m::VOCAB_SIZE,
         hf::mamba1_130m::PAD_VOCAB_SIZE_MULTIPLE,
-        mamba1_block::Mamba1BlockConfig::new(hf::mamba1_130m::D_MODEL),
+        mamba1::Mamba1Config::new(hf::mamba1_130m::D_MODEL),
         true,
     );
     let mamba = {
@@ -158,7 +158,7 @@ pub async fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
         mamba
     };
 
-    let mut models = MambaWrapper::new(
+    let models = MambaWrapper::new(
         tokenizer,
         MambaModel::Mamba1(mamba),
         MambaModelConfig::Mamba1(mamba_config),
@@ -170,7 +170,7 @@ pub async fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
 #[cfg(feature = "mamba2")]
 pub async fn models_mamba2<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
     use crate::safetensors_load_mamba2;
-    use burn_mamba::{mamba2, mamba2_block};
+    use burn_mamba::mamba2;
 
     let api = Api::new().await?;
 
@@ -224,11 +224,11 @@ pub async fn models_mamba2<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
 
     let device: B::Device = Default::default();
 
-    let mamba_config = mamba2::Mamba2Config::new(
+    let mamba_config = mamba2::Mamba2NetworkConfig::new(
         hf::mamba2_130m::N_LAYER,
         hf::mamba2_130m::VOCAB_SIZE,
         hf::mamba2_130m::PAD_VOCAB_SIZE_MULTIPLE,
-        mamba2_block::Mamba2BlockConfig::new(hf::mamba2_130m::D_MODEL),
+        mamba2::Mamba2Config::new(hf::mamba2_130m::D_MODEL),
         true,
     );
     let mamba = {

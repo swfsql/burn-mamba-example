@@ -127,17 +127,17 @@ impl<B: Backend> MambaWrapper<B> {
     }
 
     /// Initializes a list of empty (zero, null) [burn_mamba::step::MambaBlockCache] for a cached run.
-    pub fn empty_caches(&self, batch: usize) -> anyhow::Result<MambaBlockCaches<B>> {
+    pub fn empty_caches(&self, batch: usize) -> anyhow::Result<MambaCaches<B>> {
         let device = self.mamba.device();
-        let caches = MambaBlockCaches::<B>::empty_caches(batch, &self.mamba_config, &device);
+        let caches = MambaCaches::<B>::empty_caches(batch, &self.mamba_config, &device);
         Ok(caches)
     }
 
-    /// Reset and make up to `sample_len - 1` cacheless (training-friendly) calls to generate up to `sample_len - 1` tokens.
+    /// Reset and make up to `sample_len - 1` parallel (training-friendly) calls to generate up to `sample_len - 1` tokens.
     /// Returns how many tokens and the instant after the first token got generated.
     ///
     /// `mamba2_chunk_size`: Chunk size for Mamba2 selective scan. Defaults to 256. No effect for Mamba1.
-    pub fn run_cacheless(
+    pub fn run_parallel(
         &mut self,
         prompt: &str,
         sample_len: usize,
@@ -219,9 +219,9 @@ impl<B: Backend> MambaWrapper<B> {
         Ok((i, instant))
     }
 
-    /// Reset and make up to `sample_len - 1` cached (inference-friendly) calls to generate up to `sample_len - 1` tokens.
+    /// Reset and make up to `sample_len - 1` sequential (inference-friendly) calls to generate up to `sample_len - 1` tokens.
     /// Returns how many tokens and the instant after the first token got generated.
-    pub fn run_cached(
+    pub fn run_sequential(
         &mut self,
         prompt: &str,
         sample_len: usize,
@@ -274,7 +274,7 @@ impl<B: Backend> MambaWrapper<B> {
     pub fn step(
         &self,
         input: usize,
-        mut caches: Option<&mut MambaBlockCaches<B>>,
+        mut caches: Option<&mut MambaCaches<B>>,
     ) -> anyhow::Result<candle_core::Tensor> {
         let device = self.mamba.device();
         let input = Tensor::from_data([input], &device);
@@ -373,27 +373,27 @@ pub enum MambaVersion {
 #[derive(Debug)]
 pub enum MambaModel<B: Backend> {
     #[cfg(feature = "mamba1")]
-    Mamba1(mamba1::Mamba1<B>),
+    Mamba1(mamba1::Mamba1Network<B>),
     #[cfg(feature = "mamba2")]
-    Mamba2(mamba2::Mamba2<B>),
+    Mamba2(mamba2::Mamba2Network<B>),
 }
 
 #[cfg(any(feature = "mamba1", feature = "mamba2"))]
 #[derive(Clone, Debug)]
 pub enum MambaModelConfig {
     #[cfg(feature = "mamba1")]
-    Mamba1(mamba1::Mamba1Config),
+    Mamba1(mamba1::Mamba1NetworkConfig),
     #[cfg(feature = "mamba2")]
-    Mamba2(mamba2::Mamba2Config),
+    Mamba2(mamba2::Mamba2NetworkConfig),
 }
 
 #[cfg(any(feature = "mamba1", feature = "mamba2"))]
 #[derive(Clone, Debug)]
-pub enum MambaBlockCaches<B: Backend> {
+pub enum MambaCaches<B: Backend> {
     #[cfg(feature = "mamba1")]
-    Mamba1(mamba1::Mamba1BlockCaches<B>),
+    Mamba1(mamba1::Mamba1Caches<B>),
     #[cfg(feature = "mamba2")]
-    Mamba2(mamba2::Mamba2BlockCaches<B>),
+    Mamba2(mamba2::Mamba2Caches<B>),
 }
 
 #[cfg(any(feature = "mamba1", feature = "mamba2"))]
@@ -440,26 +440,26 @@ impl<B: Backend> MambaModel<B> {
     pub fn step(
         &self,
         x: Tensor<B, 1, Int>,
-        caches: MambaBlockCaches<B>,
-    ) -> (Tensor<B, 2>, MambaBlockCaches<B>) {
+        caches: MambaCaches<B>,
+    ) -> (Tensor<B, 2>, MambaCaches<B>) {
         #[allow(irrefutable_let_patterns)]
         match self {
             #[cfg(feature = "mamba1")]
             Self::Mamba1(m) => {
-                let MambaBlockCaches::Mamba1(caches) = caches else {
+                let MambaCaches::Mamba1(caches) = caches else {
                     unreachable!()
                 };
                 let (logits, new_caches) = m.step(x, caches.clone());
-                let new_caches = MambaBlockCaches::Mamba1(new_caches);
+                let new_caches = MambaCaches::Mamba1(new_caches);
                 (logits, new_caches)
             }
             #[cfg(feature = "mamba2")]
             Self::Mamba2(m) => {
-                let MambaBlockCaches::Mamba2(caches) = caches else {
+                let MambaCaches::Mamba2(caches) = caches else {
                     unreachable!()
                 };
                 let (logits, new_caches) = m.step(x, Some(caches.clone()));
-                let new_caches = MambaBlockCaches::Mamba2(new_caches);
+                let new_caches = MambaCaches::Mamba2(new_caches);
                 (logits, new_caches)
             }
         }
@@ -503,7 +503,7 @@ impl MambaModelConfig {
 }
 
 #[cfg(any(feature = "mamba1", feature = "mamba2"))]
-impl<B: Backend> MambaBlockCaches<B> {
+impl<B: Backend> MambaCaches<B> {
     pub fn empty_caches(batch: usize, mamba_config: &MambaModelConfig, device: &B::Device) -> Self {
         let mamba_version = mamba_config.version();
         #[allow(irrefutable_let_patterns)]
@@ -513,27 +513,26 @@ impl<B: Backend> MambaBlockCaches<B> {
                 let MambaModelConfig::Mamba1(config) = mamba_config else {
                     unreachable!()
                 };
-                let caches = mamba1::Mamba1BlockCachesConfig::new_from_block_config(
+                let caches = mamba1::Mamba1CachesConfig::new_from_block_config(
                     config.n_layer,
                     batch,
                     config.mamba_block.clone(),
                 )
                 .init(device);
-                MambaBlockCaches::Mamba1(caches)
+                MambaCaches::Mamba1(caches)
             }
             #[cfg(feature = "mamba2")]
             MambaVersion::Mamba2 => {
                 let MambaModelConfig::Mamba2(config) = mamba_config else {
                     unreachable!()
                 };
-                let caches = mamba2::Mamba2BlockCachesConfig::new_from_block_config(
+                let caches = mamba2::Mamba2CachesConfig::new_from_block_config(
                     config.n_real_layers,
-                    None,
                     batch,
                     config.mamba_block.clone(),
                 )
                 .init(device);
-                MambaBlockCaches::Mamba2(caches)
+                MambaCaches::Mamba2(caches)
             }
         }
     }

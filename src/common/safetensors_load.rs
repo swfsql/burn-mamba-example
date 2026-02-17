@@ -11,9 +11,9 @@ use safetensors::SafeTensors;
 #[cfg(feature = "mamba1")]
 pub fn safetensors_load_mamba1<B: Backend>(
     mamba_safetensors_bytes: &[u8],
-    mamba_config: mamba1::Mamba1Config,
+    mamba_config: mamba1::Mamba1NetworkConfig,
     device: &B::Device,
-) -> anyhow::Result<mamba1::Mamba1<B>> {
+) -> anyhow::Result<mamba1::Mamba1Network<B>> {
     let mut mamba = mamba_config.init::<B>(&device);
     let tensors = &safetensors::SafeTensors::deserialize(&mamba_safetensors_bytes)?;
     // log::info!("{:?}", tensors.names());
@@ -108,6 +108,9 @@ pub fn safetensors_load_mamba1<B: Backend>(
 
     let param = mamba.embedding.weight.val();
     let param = param.swap_dims(1, 0);
+    // ensure the tensor is contiguous
+    let param: Tensor<B, 2> = Tensor::from_data(param.into_data(), device);
+
     mamba.lm_head = Some(burn::nn::Linear {
         weight: Param::from_tensor(param),
         bias: None,
@@ -120,9 +123,9 @@ pub fn safetensors_load_mamba1<B: Backend>(
 #[cfg(feature = "mamba2")]
 pub fn safetensors_load_mamba2<B: Backend>(
     mamba_safetensors_bytes: &[u8],
-    mamba_config: mamba2::Mamba2Config,
+    mamba_config: mamba2::Mamba2NetworkConfig,
     device: &B::Device,
-) -> anyhow::Result<mamba2::Mamba2<B>> {
+) -> anyhow::Result<mamba2::Mamba2Network<B>> {
     let mut mamba = mamba_config.init::<B>(&device);
     let tensors = &safetensors::SafeTensors::deserialize(&mamba_safetensors_bytes)?;
     // log::info!("{:?}", tensors.names());
@@ -211,6 +214,9 @@ pub fn safetensors_load_mamba2<B: Backend>(
 
     let param = mamba.embedding.weight.val();
     let param = param.swap_dims(0, 1);
+    // ensure the tensor is contiguous
+    let param: Tensor<B, 2> = Tensor::from_data(param.into_data(), device);
+
     mamba.lm_head = Some(burn::nn::Linear {
         weight: Param::from_tensor(param),
         bias: None,
@@ -247,6 +253,8 @@ pub fn load_param_f16_to_f32<B: Backend, const D: usize>(
         temp_shape[0] = shape[1];
         temp_shape[1] = shape[0];
         let tensor = tensor.reshape(temp_shape).swap_dims(0, 1);
+        // ensure the tensor is contiguous
+        let tensor: Tensor<B, D> = Tensor::from_data(tensor.into_data(), device);
 
         let tensor = tensor.reshape(shape);
         tensor
@@ -284,7 +292,10 @@ pub fn load_param_f32_to_f32<B: Backend, const D: usize>(
         let mut temp_shape = shape.clone();
         temp_shape[0] = shape[1];
         temp_shape[1] = shape[0];
-        tensor.reshape(temp_shape).swap_dims(0, 1)
+        let tensor = tensor.reshape(temp_shape).swap_dims(0, 1);
+        // ensure the tensor is contiguous
+        let tensor: Tensor<B, D> = Tensor::from_data(tensor.into_data(), device);
+        tensor
     } else {
         tensor.reshape(shape)
     };

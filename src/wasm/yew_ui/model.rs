@@ -1,7 +1,5 @@
 // use crate::safetensors_load;
-use crate::{
-    LogitsProcessorWrapper, MambaBlockCaches, MambaModel, MambaModelConfig, MambaWrapper, hf,
-};
+use crate::{LogitsProcessorWrapper, MambaCaches, MambaModel, MambaModelConfig, MambaWrapper, hf};
 use burn::prelude::*;
 use hf_hub::{
     Repo, RepoType,
@@ -13,12 +11,12 @@ use tokenizers::Tokenizer;
 #[cfg(feature = "mamba1")]
 use crate::safetensors_load_mamba1;
 #[cfg(feature = "mamba1")]
-use burn_mamba::{mamba1, mamba1_block};
+use burn_mamba::mamba1;
 
 #[cfg(feature = "mamba2")]
 use crate::safetensors_load_mamba2;
 #[cfg(feature = "mamba2")]
-use burn_mamba::{mamba2, mamba2_block};
+use burn_mamba::mamba2;
 
 pub struct Model<B: Backend> {
     // general data
@@ -148,19 +146,19 @@ impl<B: Backend> Default for MambaWrapperBuilder<B> {
             tokenizer: None,
             mamba: None,
             #[cfg(feature = "mamba1")]
-            mamba_config: Some(MambaModelConfig::Mamba1(mamba1::Mamba1Config::new(
+            mamba_config: Some(MambaModelConfig::Mamba1(mamba1::Mamba1NetworkConfig::new(
                 hf::mamba1_130m::N_LAYER,
                 hf::mamba1_130m::VOCAB_SIZE,
                 hf::mamba1_130m::PAD_VOCAB_SIZE_MULTIPLE,
-                mamba1_block::Mamba1BlockConfig::new(hf::mamba1_130m::D_MODEL),
+                mamba1::Mamba1Config::new(hf::mamba1_130m::D_MODEL),
                 true,
             ))),
             #[cfg(feature = "mamba2")]
-            mamba_config: Some(MambaModelConfig::Mamba2(mamba2::Mamba2Config::new(
+            mamba_config: Some(MambaModelConfig::Mamba2(mamba2::Mamba2NetworkConfig::new(
                 hf::mamba2_130m::N_LAYER,
                 hf::mamba2_130m::VOCAB_SIZE,
                 hf::mamba2_130m::PAD_VOCAB_SIZE_MULTIPLE,
-                mamba2_block::Mamba2BlockConfig::new(hf::mamba2_130m::D_MODEL),
+                mamba2::Mamba2Config::new(hf::mamba2_130m::D_MODEL),
                 true,
             ))),
         }
@@ -278,7 +276,7 @@ impl<T> Connection<T> {
 
 pub struct Wrapper<B: Backend> {
     pub models: MambaWrapper<B>,
-    pub caches: MambaBlockCaches<B>,
+    pub caches: MambaCaches<B>,
     pub processor: LogitsProcessorWrapper,
 }
 
