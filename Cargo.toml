@@ -61,7 +61,7 @@ tokenizers = { version = "0.21.1", default-features = false, features = [
 
 ### For the main branch. ###
 burn = { version = "0.21.0-pre.1", default-features = false }
-burn-mamba = { git = "https://github.com/swfsql/burn-mamba.git", default-features = false, rev = "b1c93b7" }
+burn-mamba = { git = "https://github.com/swfsql/burn-mamba.git", default-features = false, rev = "1d7a0ca" }
 
 ### For local development. ###
 # burn = { path = "../burn/crates/burn", default-features = false }
