@@ -168,13 +168,13 @@ pub fn safetensors_load_mamba2<B: Backend>(
             false,
         )?;
         load_param_f16_to_f32(
-            &mut mamba_block.a_log,
+            &mut mamba_block.a_log_h,
             name("A_log"),
             tensors,
             device,
             false,
         )?;
-        load_param_f32_to_f32(&mut mamba_block.d, name("D"), tensors, device, false)?;
+        load_param_f32_to_f32(&mut mamba_block.d_h, name("D"), tensors, device, false)?;
         load_param_f16_to_f32(
             &mut mamba_block.conv1d.weight,
             name("conv1d.weight"),
@@ -190,7 +190,7 @@ pub fn safetensors_load_mamba2<B: Backend>(
             false,
         )?;
         load_param_f16_to_f32(
-            &mut mamba_block.dt_bias,
+            &mut mamba_block.dt_bias_h,
             name("dt_bias"),
             tensors,
             device,

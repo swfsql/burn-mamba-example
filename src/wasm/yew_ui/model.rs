@@ -74,10 +74,17 @@ impl<B: Backend> Model<B> {
 
 impl<B: Backend> Default for Model<B> {
     fn default() -> Self {
+        let device = <B::Device>::default();
+        burn::tensor::set_default_dtypes::<B>(
+            &device,
+            crate::PRECISION_FLOAT_D_TYPE, // default float
+            crate::PRECISION_INT_D_TYPE,   // default int
+        )
+        .unwrap();
+
         Self {
             // general data
-            device: <B::Device>::default(),
-
+            device,
             // fetching, loading, building
             cache_api: Connection::Disconnected,
             tokenizer: ModelData::new(

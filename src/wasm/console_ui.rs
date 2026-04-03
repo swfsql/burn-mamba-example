@@ -133,6 +133,12 @@ pub async fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
     };
 
     let device: B::Device = Default::default();
+    burn::tensor::set_default_dtypes::<B>(
+        &device,
+        crate::PRECISION_FLOAT_D_TYPE, // default float
+        crate::PRECISION_INT_D_TYPE,   // default int
+    )
+    .unwrap();
 
     let mamba_config = mamba1::Mamba1NetworkConfig::new(
         hf::mamba1_130m::N_LAYER,
@@ -223,6 +229,12 @@ pub async fn models_mamba2<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
     };
 
     let device: B::Device = Default::default();
+    burn::tensor::set_default_dtypes::<B>(
+        &device,
+        crate::PRECISION_FLOAT_D_TYPE, // default float
+        crate::PRECISION_INT_D_TYPE,   // default int
+    )
+    .unwrap();
 
     let mamba_config = mamba2::Mamba2NetworkConfig::new(
         hf::mamba2_130m::N_LAYER,

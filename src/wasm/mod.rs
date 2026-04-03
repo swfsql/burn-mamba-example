@@ -9,6 +9,8 @@ use crate::Precision;
 
 #[cfg(feature = "ndarray")]
 type MyBackend = burn::backend::NdArray<Precision, i32>;
+#[cfg(feature = "flex")]
+type MyBackend = burn_flex::Flex;
 #[cfg(feature = "wgpu")]
 type MyBackend = burn::backend::Wgpu<Precision, i32>;
 

@@ -22,9 +22,11 @@ use burn::tensor::DType;
 use candle_transformers::generation::LogitsProcessor;
 pub use safetensors_load::load_param_f32_to_f32;
 
+#[allow(unused_imports)]
 pub type Precision = f32;
-pub const PRECISION_D_TYPE: DType = DType::F32;
-pub const CANDLE_PRECISION_D_TYPE: candle_core::DType = candle_core::DType::F32;
+pub const PRECISION_FLOAT_D_TYPE: DType = DType::F32;
+pub const PRECISION_INT_D_TYPE: DType = DType::I32;
+pub const CANDLE_PRECISION_FLOAT_D_TYPE: candle_core::DType = candle_core::DType::F32;
 
 pub mod hf {
     pub mod tokenizer {
@@ -287,13 +289,13 @@ impl<B: Backend> MambaWrapper<B> {
         let shape = (self.padded_vocab_size(),);
 
         let logits = logits
-            .cast(PRECISION_D_TYPE)
+            .cast(PRECISION_FLOAT_D_TYPE)
             .into_data()
             .to_vec::<Precision>()
             .unwrap();
 
         let logits = candle_core::Tensor::from_vec(logits, shape, &candle_core::Device::Cpu)?
-            .to_dtype(CANDLE_PRECISION_D_TYPE)?;
+            .to_dtype(CANDLE_PRECISION_FLOAT_D_TYPE)?;
         Ok(logits)
     }
 
