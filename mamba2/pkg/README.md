@@ -17,10 +17,12 @@ Mamba-1 adapted from [huggingface/candle/mamba-minimal](https://github.com/huggi
   - ✅ `mamba2`: Mamba2 model. For executables, only one can be selected.
 - Burn backend:
   - ✅ `ndarray`: used for dev or wasm. Correct for both sequential and parallel modes. Can use `simd` for extra speed.
+  - ✅ `flex`: used for dev or wasm. Correct for both sequential and parallel modes. Can use `simd` for extra speed.
   - ⚠️ `cpu`: for cpu backend. Correct for both sequential and parallel modes. May stack overflow.
   - ⚠️ `wgpu`: for webgpu backend. Wrong for both sequential and parallel modes.
+  - ⚠️ `vulkan`: for vulkan backend. Wrong for both sequential and parallel modes.
   - ✅ `cuda`: for cuda backend. Correct for both sequential and parallel modes.
-  - ⚠️ `tch`: for pytorch backend. Correct only for parallel mode (training-friendly).
+  - ⚠️ `tch`: for pytorch backend. Wrong for both sequential and parallel modes.
 - Extra burn features:
  - ✅ `fusion`: enable the fusion feature. May be counter-productive for some cases.
  - ✅ `autotune`: enable the autotune feature. May be counter-productive for some cases.
@@ -30,28 +32,32 @@ Note: Please check Cargo.toml for more info.
 #### Performance
 
 Native generation speed:
-- Device: 2 CPU threads, RTX 2060.
-- Configuration: Single batch, params in f32, Mamba1 sequence and parallel lengths both up to 91 tokens, Mamba2 sequence and parallel lengths up to 100 and 257.
+- Device: 2 CPU threads (with std and simd), RTX 2060.
+- Configuration: Single batch, params in f32, sequence length limited to 91 tokens.
 - The results are standard/+fusion/+autotune/-fusion, in token/s.
 
 | Model | Backend | Sequental tk/s | Parallel tk/s |
 | ----: | ------: | :------------- | :------------ |
-| Mamba1 | NdArray+Simd | `1.7`✅/`---`✅/`---`✅/`---`✅ | `029`✅/`---`✅/`---`✅/`---`✅ |
-| Mamba1 | Cpu | `1.2`✅/`err`⚠️/`err`⚠️/`1.4`✅ | `2.1`✅/`err`⚠️/`err`⚠️/`0.0`⚠️ |
-| Mamba1 | Wpgu | `028`⚠️/`020`⚠️/`020`⚠️/`028`⚠️ | `279`⚠️/`140`⚠️/`139`⚠️/`269`⚠️ |
-| Mamba1 | Cuda | `031`✅/`016`✅/`019`✅/`042`✅ | `256`✅/`093`✅/`077`✅/`216`✅ |
-| Mamba1 | Tch/cpu | `011`⚠️/`---`⚠️/`---`⚠️/`---`⚠️ | `0.0`⚠️`---`⚠️/`---`⚠️/`---`⚠️ |
-| Mamba2 | NdArray+Simd | `1.8`✅/`---`✅/`---`✅/`---`✅ | `033`✅/`---`✅/`---`✅/`---`✅ |
-| Mamba2 | Cpu | `1.6`✅/`err`⚠️/`err`⚠️/`1.3`✅ | `0.0`⚠️/`err`⚠️/`err`⚠️/`0.0`⚠️ |
-| Mamba2 | Wpgu | `027`⚠️/`024`⚠️/`025`⚠️/`027`⚠️ | `218`⚠️/`118`⚠️/`229`⚠️/`278`⚠️ |
-| Mamba2 | Cuda | `040`✅/`021`✅/`022`✅/`040`✅ | `153`✅/`128`✅/`113`✅/`145`✅ |
-| Mamba2 | Tch/cpu | `err`⚠️/`---`⚠️/`---`⚠️/`---`⚠️ | `040`✅/`---`✅/`---`✅/`---`✅ |
+| Mamba1 | NdArray ✅ | `2.6`/`---`/`---`/`---` | `036`/`---`/`---`/`---` |
+| Mamba1 | Flex ✅ | `015`/`---`/`---`/`---` | `029`/`---`/`---`/`---` |
+| Mamba1 | Cpu ⚠️ | `err`/`---`/`---`/`---` | `err`/`---`/`---`/`---` |
+| Mamba1 | Wpgu ⚠️ | `046`/`---`/`---`/`---` | `450`/`---`/`---`/`---` |
+| Mamba1 | Vulkan ⚠️ | `046`/`---`/`---`/`---` | `438`/`---`/`---`/`---` |
+| Mamba1 | Cuda ✅ | `063`/`021`/`021`/`067` | `408`/`177`/`155`/`294` |
+| Mamba1 | Tch/cpu ⚠️ | `009`/`---`/`---`/`---` | `040``---`/`---`/`---` |
+| Mamba2 | NdArray ✅ | `2.6`/`---`/`---`/`---` | `039`/`---`/`---`/`---` |
+| Mamba2 | Flex ✅ | `4.3`/`---`/`---`/`---` | `033`/`---`/`---`/`---` |
+| Mamba2 | Cpu ⚠️ | `err`/`---`/`---`/`---` | `err`/`---`/`---`/`---` |
+| Mamba2 | Wpgu ⚠️ | `036`/`---`/`---`/`---` | `403`/`---`/`---`/`---` |
+| Mamba2 | Vulkan ⚠️ | `043`/`---`/`---`/`---` | `424`/`---`/`---`/`---` |
+| Mamba2 | Cuda ✅ | `056`/`028`/`030`/`058` | `261`/`226`/`138`/`194` |
+| Mamba2 | Tch/cpu ⚠️ | `err`/`---`/`---`/`---` | `040`/`---`/`---`/`---` |
 
 ### Example Outputs
 
-To test for correctness for some backend, I recommend first checking `native`, if sequential matches against parallel, and optionally if they match against the `ndarray` backend. Then even if they don't match, you can guess if the results are sensible, that they return coeherent tokens, don't cause panics, etc.
+To test for correctness for some backend, I recommend first checking `native`, if sequential matches against parallel, and optionally if they match against the `ndarray` or `flex` backends. Then even if they don't match, you can guess if the results are sensible, that they return coeherent tokens, don't cause panics, etc.
 
-The following are my results from different backends (native ndarray, native wgpu + cuda, wasm ndarray), with sequential and parallel always matching.
+The following are my results from different backends (native ndarray/flex, native wgpu + cuda, wasm ndarray/flex), with sequential and parallel always matching.
 
 Mamba1:
 ```
@@ -81,17 +87,17 @@ Using [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/), [wasm-opt](h
 
 ```bash
 wasm-pack build --release --target web --out-dir "frontend/mamba1/pkg" \
-  --no-default-features --features "ndarray,simd,mamba1"
+  --no-default-features --features "flex,simd,mamba1"
 miniserve -i 127.0.0.1 "frontend/"
 ```
 Then open the page at [http://127.0.0.1:8080/mamba1/index.html](http://127.0.0.1:8080/mamba1/index.html) and open the console logs.
-Note: This will automatically download model weights, load and run them, first in sequential mode and then in parallel mode, similarly to the native console one.
+Note: This will automatically download model weights, load and run them, first in sequential mode and then in parallel mode, similarly to the native console one. Some CPU flags may be required at runtime.
 
 #### Web Mamba2 (Yew UI)
 
 ```bash
 wasm-pack build --release --target web --out-dir "frontend/mamba2/pkg" --no-opt \
-  --no-default-features --features "ndarray,simd,yew,mamba2"
+  --no-default-features --features "flex,simd,yew,mamba2"
 miniserve -i 127.0.0.1 "frontend/"
 ```
 Then open the page at [http://127.0.0.1:8080/mamba2/index.html](http://127.0.0.1:8080/mamba2/index.html).
