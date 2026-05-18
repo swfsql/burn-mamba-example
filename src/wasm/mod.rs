@@ -5,13 +5,14 @@ pub mod yew_ui;
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
+#[allow(unused_imports)]
 use crate::Precision;
 
-#[cfg(feature = "ndarray")]
+#[cfg(feature = "backend-ndarray")]
 type MyBackend = burn::backend::NdArray<Precision, i32>;
-#[cfg(feature = "flex")]
-type MyBackend = burn_flex::Flex;
-#[cfg(feature = "wgpu")]
+#[cfg(feature = "backend-flex")]
+type MyBackend = burn::backend::flex::Flex;
+#[cfg(feature = "backend-wgpu")]
 type MyBackend = burn::backend::Wgpu<Precision, i32>;
 
 #[wasm_bindgen]
@@ -19,6 +20,8 @@ pub async fn wasm_main() {
     std::panic::set_hook(Box::new(console_error_panic_hook::hook));
     console_log::init_with_level(log::Level::Debug).unwrap();
     log::info!("wasm initialized");
+
+    // TODO: configure the backend to the correct precision (crate::Precision).
 
     #[cfg(not(feature = "yew"))]
     console_ui::run::<MyBackend>().await.unwrap();

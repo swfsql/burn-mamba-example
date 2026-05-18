@@ -1,5 +1,6 @@
 use crate::{LogitsProcessorWrapper, MambaModel, MambaModelConfig, MambaWrapper, hf};
 use burn::prelude::*;
+use burn_mamba::prelude::*;
 use hf_hub::{
     Repo, RepoType,
     api::wasm::Api,
@@ -80,7 +81,6 @@ pub async fn run<B: Backend>() -> anyhow::Result<()> {
 #[cfg(feature = "mamba1")]
 pub async fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
     use crate::safetensors_load_mamba1;
-    use burn_mamba::mamba1;
 
     let api = Api::new().await?;
 
@@ -140,11 +140,11 @@ pub async fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
     )
     .unwrap();
 
-    let mamba_config = mamba1::Mamba1NetworkConfig::new(
+    let mamba_config = Mamba1NetworkConfig::new(
         hf::mamba1_130m::N_LAYER,
         hf::mamba1_130m::VOCAB_SIZE,
         hf::mamba1_130m::PAD_VOCAB_SIZE_MULTIPLE,
-        mamba1::Mamba1Config::new(hf::mamba1_130m::D_MODEL),
+        Mamba1Config::new(hf::mamba1_130m::D_MODEL),
         true,
     );
     let mamba = {

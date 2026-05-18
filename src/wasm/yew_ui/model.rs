@@ -1,6 +1,7 @@
 // use crate::safetensors_load;
 use crate::{LogitsProcessorWrapper, MambaCaches, MambaModel, MambaModelConfig, MambaWrapper, hf};
 use burn::prelude::*;
+use burn_mamba::prelude::*;
 use hf_hub::{
     Repo, RepoType,
     api::wasm::{Api, ApiRepo, Metadata, UrlTemplate},
@@ -9,14 +10,15 @@ use hf_hub::{
 use tokenizers::Tokenizer;
 
 #[cfg(feature = "mamba1")]
-use crate::safetensors_load_mamba1;
+pub use burn::prelude::Backend as BackendExt;
+#[cfg(feature = "mamba2")]
+pub use burn_mamba::prelude::Mamba2BackendExt as BackendExt;
+
 #[cfg(feature = "mamba1")]
-use burn_mamba::mamba1;
+use crate::safetensors_load_mamba1;
 
 #[cfg(feature = "mamba2")]
 use crate::safetensors_load_mamba2;
-#[cfg(feature = "mamba2")]
-use burn_mamba::mamba2;
 
 pub struct Model<B: Backend> {
     // general data
@@ -153,26 +155,26 @@ impl<B: Backend> Default for MambaWrapperBuilder<B> {
             tokenizer: None,
             mamba: None,
             #[cfg(feature = "mamba1")]
-            mamba_config: Some(MambaModelConfig::Mamba1(mamba1::Mamba1NetworkConfig::new(
+            mamba_config: Some(MambaModelConfig::Mamba1(Mamba1NetworkConfig::new(
                 hf::mamba1_130m::N_LAYER,
                 hf::mamba1_130m::VOCAB_SIZE,
                 hf::mamba1_130m::PAD_VOCAB_SIZE_MULTIPLE,
-                mamba1::Mamba1Config::new(hf::mamba1_130m::D_MODEL),
+                Mamba1Config::new(hf::mamba1_130m::D_MODEL),
                 true,
             ))),
             #[cfg(feature = "mamba2")]
-            mamba_config: Some(MambaModelConfig::Mamba2(mamba2::Mamba2NetworkConfig::new(
+            mamba_config: Some(MambaModelConfig::Mamba2(Mamba2NetworkConfig::new(
                 hf::mamba2_130m::N_LAYER,
                 hf::mamba2_130m::VOCAB_SIZE,
                 hf::mamba2_130m::PAD_VOCAB_SIZE_MULTIPLE,
-                mamba2::Mamba2Config::new(hf::mamba2_130m::D_MODEL),
+                Mamba2Config::new(hf::mamba2_130m::D_MODEL),
                 true,
             ))),
         }
     }
 }
 
-impl<B: Backend> MambaWrapperBuilder<B> {
+impl<B: Backend + BackendExt> MambaWrapperBuilder<B> {
     pub fn is_ready(&self) -> bool {
         self.tokenizer.is_some() && self.mamba.is_some()
     }
@@ -242,7 +244,7 @@ impl<B: Backend> MambaWrapperBuilder<B> {
     }
 }
 
-impl<B: Backend> From<MambaWrapperBuilder<B>> for Wrapper<B> {
+impl<B: Backend + BackendExt> From<MambaWrapperBuilder<B>> for Wrapper<B> {
     fn from(value: MambaWrapperBuilder<B>) -> Self {
         match (value.tokenizer, value.mamba, value.mamba_config) {
             (Some(t), Some(m), Some(c)) => {
@@ -287,7 +289,7 @@ pub struct Wrapper<B: Backend> {
     pub processor: LogitsProcessorWrapper,
 }
 
-impl<B: Backend> Wrapper<B> {
+impl<B: Backend + BackendExt> Wrapper<B> {
     pub fn new(models: MambaWrapper<B>) -> Self {
         let caches = models.empty_caches(1).unwrap();
         Self {

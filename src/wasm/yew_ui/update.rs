@@ -4,9 +4,14 @@ pub use super::model::{self, Connection, Model};
 use hf_hub::{api::wasm::Api, types::TmpFileBlobKey};
 use yew::prelude::*;
 
+#[cfg(feature = "mamba1")]
+pub use burn::prelude::Backend as BackendExt;
+#[cfg(feature = "mamba2")]
+pub use burn_mamba::prelude::Mamba2BackendExt as BackendExt;
+
 const TICK_MILLIS: u32 = 1;
 
-impl<B: burn::prelude::Backend> model::Model<B> {
+impl<B: burn::prelude::Backend + BackendExt> model::Model<B> {
     pub fn update(&mut self, ctx: &Context<Self>, msg: Msg) -> bool {
         match msg {
             // Msg::Todo => {
