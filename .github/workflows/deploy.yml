@@ -17,7 +17,7 @@ jobs:
     build:
         runs-on: ubuntu-latest
         permissions:
-          contents: write
+            contents: write
         steps:
             - uses: actions/checkout@v4
 
@@ -40,10 +40,10 @@ jobs:
               run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
             - name: Build Release wasm for Mamba1
-              run: wasm-pack build --release --target web --out-dir "frontend/mamba1/pkg" --no-opt --no-default-features --features "flex,yew,mamba1"
+              run: wasm-pack build --release --target web --out-dir "frontend/mamba1/pkg" --no-opt --no-default-features --features "backend-flex,backend-simd,yew,mamba1"
 
             - name: Build Release wasm for Mamba2
-              run: wasm-pack build --release --target web --out-dir "frontend/mamba2/pkg" --no-opt --no-default-features --features "flex,yew,mamba2"
+              run: wasm-pack build --release --target web --out-dir "frontend/mamba2/pkg" --no-opt --no-default-features --features "backend-flex,backend-simd,yew,mamba2"
 
             - name: Prepare Wasm Deploy
               run: |
