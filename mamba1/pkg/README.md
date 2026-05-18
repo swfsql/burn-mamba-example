@@ -74,7 +74,7 @@ Mamba is the most popular and well-known of all Mambo songs. It was first record
 ##### Native Mamba2 (Console)
 ```bash
 RUSTFLAGS="-C target-cpu=native"
-cargo run --release --no-default-features --features "native,wgpu,mamba2"
+cargo run --release --no-default-features --features "native,backend-flex,backend-simd,mamba2"
 ```
 Notes:
 - This will automatically download model weights, load and run them, first in sequential mode and then in parallel mode.
@@ -87,7 +87,7 @@ Using [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/), [wasm-opt](h
 
 ```bash
 wasm-pack build --release --target web --out-dir "frontend/mamba1/pkg" \
-  --no-default-features --features "flex,simd,mamba1"
+  --no-default-features --features "backend-flex,backend-simd,mamba1"
 miniserve -i 127.0.0.1 "frontend/"
 ```
 Then open the page at [http://127.0.0.1:8080/mamba1/index.html](http://127.0.0.1:8080/mamba1/index.html) and open the console logs.
@@ -97,7 +97,7 @@ Note: This will automatically download model weights, load and run them, first i
 
 ```bash
 wasm-pack build --release --target web --out-dir "frontend/mamba2/pkg" --no-opt \
-  --no-default-features --features "flex,simd,yew,mamba2"
+  --no-default-features --features "backend-flex,backend-simd,yew,mamba2"
 miniserve -i 127.0.0.1 "frontend/"
 ```
 Then open the page at [http://127.0.0.1:8080/mamba2/index.html](http://127.0.0.1:8080/mamba2/index.html).
