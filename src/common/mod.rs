@@ -18,6 +18,11 @@ use token_output_stream::*;
 #[allow(unused_imports)]
 use tokenizers::Tokenizer;
 
+#[cfg(feature = "mamba1")]
+pub use burn::prelude::Backend as BackendExt;
+#[cfg(feature = "mamba2")]
+pub use burn_mamba::prelude::Mamba2BackendExt as BackendExt;
+
 use burn::tensor::DType;
 use candle_transformers::generation::LogitsProcessor;
 pub use safetensors_load::load_param_f32_to_f32;
@@ -97,8 +102,16 @@ pub struct LogitsProcessorWrapper {
     repeat_last_n: usize,
 }
 
+#[cfg(feature = "mamba1")]
+type ExtraArg = ();
+#[cfg(feature = "mamba2")]
+type ExtraArg = burn_mamba::prelude::Mamba2SsdPath;
+
 #[cfg(any(feature = "mamba1", feature = "mamba2"))]
-impl<B: Backend> MambaWrapper<B> {
+impl<B: Backend> MambaWrapper<B>
+where
+    B: BackendExt,
+{
     pub fn new(tokenizer: Tokenizer, mamba: MambaModel<B>, mamba_config: MambaModelConfig) -> Self {
         Self {
             tokenizer: TokenOutputStream::new(tokenizer),
@@ -144,7 +157,7 @@ impl<B: Backend> MambaWrapper<B> {
         prompt: &str,
         sample_len: usize,
         logits_processor_config: &mut LogitsProcessorWrapper,
-        mamba2_chunk_size: Option<usize>,
+        extra_arg: ExtraArg,
     ) -> anyhow::Result<(usize, Option<std::time::Instant>)> {
         use std::io::Write;
         let (mut tokens, eos_token) = self.reset_prompt(prompt)?;
@@ -164,7 +177,7 @@ impl<B: Backend> MambaWrapper<B> {
             let input: Tensor<B, 1, Int> = Tensor::from_data(tokens.as_slice(), &device);
             let input = input.unsqueeze();
 
-            let logits_list = self.mamba.forward(input, mamba2_chunk_size);
+            let logits_list = self.mamba.forward(input, extra_arg.clone());
             if i == 0 {
                 instant = Some(std::time::Instant::now());
             }
@@ -375,31 +388,34 @@ pub enum MambaVersion {
 #[derive(Debug)]
 pub enum MambaModel<B: Backend> {
     #[cfg(feature = "mamba1")]
-    Mamba1(mamba1::Mamba1Network<B>),
+    Mamba1(mamba1::network::Mamba1Network<B>),
     #[cfg(feature = "mamba2")]
-    Mamba2(mamba2::Mamba2Network<B>),
+    Mamba2(mamba2::network::Mamba2Network<B>),
 }
 
 #[cfg(any(feature = "mamba1", feature = "mamba2"))]
 #[derive(Clone, Debug)]
 pub enum MambaModelConfig {
     #[cfg(feature = "mamba1")]
-    Mamba1(mamba1::Mamba1NetworkConfig),
+    Mamba1(mamba1::network::Mamba1NetworkConfig),
     #[cfg(feature = "mamba2")]
-    Mamba2(mamba2::Mamba2NetworkConfig),
+    Mamba2(mamba2::network::Mamba2NetworkConfig),
 }
 
 #[cfg(any(feature = "mamba1", feature = "mamba2"))]
 #[derive(Clone, Debug)]
 pub enum MambaCaches<B: Backend> {
     #[cfg(feature = "mamba1")]
-    Mamba1(mamba1::Mamba1Caches<B>),
+    Mamba1(mamba1::cache::Mamba1Caches<B>),
     #[cfg(feature = "mamba2")]
-    Mamba2(mamba2::Mamba2Caches<B>),
+    Mamba2(mamba2::cache::Mamba2Caches<B>),
 }
 
 #[cfg(any(feature = "mamba1", feature = "mamba2"))]
-impl<B: Backend> MambaModel<B> {
+impl<B: Backend> MambaModel<B>
+where
+    B: BackendExt,
+{
     pub fn version(&self) -> MambaVersion {
         match self {
             #[cfg(feature = "mamba1")]
@@ -424,19 +440,24 @@ impl<B: Backend> MambaModel<B> {
             Self::Mamba2(m) => m.layers.n_real_layers,
         }
     }
-    /// `mamba2_chunk_size`: Chunk size for Mamba2 selective scan. Defaults to 256. No effect for Mamba1.
-    pub fn forward(&self, x: Tensor<B, 2, Int>, mamba2_chunk_size: Option<usize>) -> Tensor<B, 3> {
+    /// `mamba2_chunk_size`: Chunk size for Mamba2 selective scan. No effect for Mamba1.
+    pub fn forward(&self, x: Tensor<B, 2, Int>, extra_arg: ExtraArg) -> Tensor<B, 3> {
         let res = match self {
             #[cfg(feature = "mamba1")]
             Self::Mamba1(m) => m.forward(x),
             #[cfg(feature = "mamba2")]
             Self::Mamba2(m) => {
                 // note: this always from the start, from empty caches
-                let (y, _cache) = m.forward(x, None, mamba2_chunk_size);
+                let (y, _cache) = m.forward(
+                    x,
+                    None,
+                    // mamba2_chunk_size.map(|n| burn_mamba::mamba2::mamba2::SsdPath::Core(n))
+                    extra_arg.clone(),
+                );
                 y
             }
         };
-        let _mamba2_chunk_size = mamba2_chunk_size;
+        let _extra_arg = extra_arg;
         res
     }
     pub fn step(
@@ -515,7 +536,7 @@ impl<B: Backend> MambaCaches<B> {
                 let MambaModelConfig::Mamba1(config) = mamba_config else {
                     unreachable!()
                 };
-                let caches = mamba1::Mamba1CachesConfig::new_from_block_config(
+                let caches = mamba1::cache::Mamba1CachesConfig::new_from_block_config(
                     config.n_layer,
                     batch,
                     config.mamba_block.clone(),
@@ -528,7 +549,7 @@ impl<B: Backend> MambaCaches<B> {
                 let MambaModelConfig::Mamba2(config) = mamba_config else {
                     unreachable!()
                 };
-                let caches = mamba2::Mamba2CachesConfig::new_from_block_config(
+                let caches = mamba2::cache::Mamba2CachesConfig::new_from_block_config(
                     config.n_real_layers,
                     batch,
                     config.mamba_block.clone(),

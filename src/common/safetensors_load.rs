@@ -11,9 +11,9 @@ use safetensors::SafeTensors;
 #[cfg(feature = "mamba1")]
 pub fn safetensors_load_mamba1<B: Backend>(
     mamba_safetensors_bytes: &[u8],
-    mamba_config: mamba1::Mamba1NetworkConfig,
+    mamba_config: mamba1::network::Mamba1NetworkConfig,
     device: &B::Device,
-) -> anyhow::Result<mamba1::Mamba1Network<B>> {
+) -> anyhow::Result<mamba1::network::Mamba1Network<B>> {
     let mut mamba = mamba_config.init::<B>(&device);
     let tensors = &safetensors::SafeTensors::deserialize(&mamba_safetensors_bytes)?;
     // log::info!("{:?}", tensors.names());
@@ -123,9 +123,9 @@ pub fn safetensors_load_mamba1<B: Backend>(
 #[cfg(feature = "mamba2")]
 pub fn safetensors_load_mamba2<B: Backend>(
     mamba_safetensors_bytes: &[u8],
-    mamba_config: mamba2::Mamba2NetworkConfig,
+    mamba_config: mamba2::network::Mamba2NetworkConfig,
     device: &B::Device,
-) -> anyhow::Result<mamba2::Mamba2Network<B>> {
+) -> anyhow::Result<mamba2::network::Mamba2Network<B>> {
     let mut mamba = mamba_config.init::<B>(&device);
     let tensors = &safetensors::SafeTensors::deserialize(&mamba_safetensors_bytes)?;
     // log::info!("{:?}", tensors.names());

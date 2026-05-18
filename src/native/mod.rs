@@ -2,6 +2,7 @@
 use crate::Precision;
 use crate::{LogitsProcessorWrapper, MambaModel, MambaModelConfig, MambaWrapper, hf};
 use burn::prelude::*;
+use burn::tensor::backend::BackendTypes;
 use hf_hub::types::FilePath;
 use hf_hub::{
     Repo, RepoType,
@@ -11,19 +12,19 @@ use hf_hub::{
 use log::info;
 
 // check README for generation speeds
-#[cfg(feature = "ndarray")]
+#[cfg(feature = "backend-ndarray")]
 type MyBackend = burn::backend::NdArray<Precision, i32>;
-#[cfg(feature = "flex")]
-type MyBackend = burn_flex::Flex;
-#[cfg(feature = "cpu")]
+#[cfg(feature = "backend-flex")]
+type MyBackend = burn::backend::Flex;
+#[cfg(feature = "backend-cpu")]
 type MyBackend = burn::backend::Cpu<Precision, i32>;
-#[cfg(feature = "tch")]
+#[cfg(any(feature = "backend-tch-cpu", feature = "backend-tch-gpu"))]
 type MyBackend = burn::backend::LibTorch<Precision>;
-#[cfg(feature = "wgpu")]
+#[cfg(feature = "backend-wgpu")]
 type MyBackend = burn::backend::Wgpu<Precision, i32>;
-#[cfg(feature = "vulkan")]
+#[cfg(feature = "backend-vulkan")]
 type MyBackend = burn::backend::Vulkan<Precision, i32>;
-#[cfg(feature = "cuda")]
+#[cfg(feature = "backend-cuda")]
 type MyBackend = burn::backend::Cuda<Precision, i32>;
 
 pub fn main() -> anyhow::Result<()> {
@@ -51,10 +52,13 @@ pub fn main() -> anyhow::Result<()> {
 
     info!("running in parallel mode (training-friendly)");
     let sample_len = 20;
+    #[cfg(feature = "mamba1")]
+    let extra_arg = ();
+    #[cfg(feature = "mamba2")]
+    let extra_arg = burn_mamba::prelude::Mamba2SsdPath::Minimal(None);
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
-    let chunk_size = 8;
     let (sample_len, start) =
-        models.run_parallel("Mamba is the", sample_len, &mut processor, Some(chunk_size))?;
+        models.run_parallel("Mamba is the", sample_len, &mut processor, extra_arg)?;
     println!();
     let elapsed = start.unwrap().elapsed().as_millis();
     let total_sample_len = (1 + sample_len) * sample_len / 2;
@@ -101,7 +105,7 @@ fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
     let tokenizer =
         tokenizers::Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
 
-    let device: <B as Backend>::Device = Default::default();
+    let device: <B as BackendTypes>::Device = Default::default();
     burn::tensor::set_default_dtypes::<B>(
         &device,
         crate::PRECISION_FLOAT_D_TYPE, // default float
@@ -115,11 +119,11 @@ fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
         let f = std::fs::File::open(mamba_filename)?;
         unsafe { memmap2::MmapOptions::new().map(&f)? }
     };
-    let mamba_config = mamba1::Mamba1NetworkConfig::new(
+    let mamba_config = mamba1::network::Mamba1NetworkConfig::new(
         hf::mamba1_130m::N_LAYER,
         hf::mamba1_130m::VOCAB_SIZE,
         hf::mamba1_130m::PAD_VOCAB_SIZE_MULTIPLE,
-        mamba1::Mamba1Config::new(hf::mamba1_130m::D_MODEL),
+        mamba1::mamba1::Mamba1Config::new(hf::mamba1_130m::D_MODEL),
         true,
     );
     let mamba =
@@ -136,13 +140,16 @@ fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
 }
 
 #[cfg(feature = "mamba2")]
-fn models_mamba2<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
+fn models_mamba2<B: Backend>() -> anyhow::Result<MambaWrapper<B>>
+where
+    B: burn_mamba::prelude::Mamba2BackendExt,
+{
     use crate::safetensors_load_mamba2;
     use burn_mamba::mamba2;
 
     let start = std::time::Instant::now();
 
-    let device: <B as Backend>::Device = Default::default();
+    let device: <B as BackendTypes>::Device = Default::default();
     burn::tensor::set_default_dtypes::<B>(
         &device,
         crate::PRECISION_FLOAT_D_TYPE, // default float
@@ -183,11 +190,11 @@ fn models_mamba2<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
             let f = std::fs::File::open(mamba_filename)?;
             unsafe { memmap2::MmapOptions::new().map(&f)? }
         };
-        let mamba_config = mamba2::Mamba2NetworkConfig::new(
+        let mamba_config = mamba2::network::Mamba2NetworkConfig::new(
             hf::mamba2_130m::N_LAYER,                 // 24
             hf::mamba2_130m::VOCAB_SIZE,              // 50277
             hf::mamba2_130m::PAD_VOCAB_SIZE_MULTIPLE, // 16
-            mamba2::Mamba2Config::new(
+            mamba2::mamba2::Mamba2Config::new(
                 hf::mamba2_130m::D_MODEL, // 768
             )
             .with_state_rank(128) // default
