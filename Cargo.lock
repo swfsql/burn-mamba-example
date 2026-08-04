@@ -657,10 +657,11 @@ dependencies = [
 [[package]]
 name = "burn-mamba"
 version = "0.32.0"
-source = "git+https://github.com/swfsql/burn-mamba.git?rev=e19ee868cfdf57af0f97991667ef586345907637#e19ee868cfdf57af0f97991667ef586345907637"
+source = "git+https://github.com/swfsql/burn-mamba.git?rev=44d381be27e20608318ff67c173267a8e49435db#44d381be27e20608318ff67c173267a8e49435db"
 dependencies = [
  "burn",
  "burn-cubecl",
+ "burn-fusion",
  "serde",
 ]
 
