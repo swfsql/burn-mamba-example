@@ -29,30 +29,6 @@ Mamba-1 adapted from [huggingface/candle/mamba-minimal](https://github.com/huggi
 
 Note: Please check Cargo.toml for more info.
 
-#### Performance
-
-Native generation speed:
-- Device: 2 CPU threads (with std and simd), RTX 2060.
-- Configuration: Single batch, params in f32, sequence length limited to 91 tokens.
-- The results are standard/+fusion/+autotune/-fusion, in token/s.
-
-| Model | Backend | Sequental tk/s | Parallel tk/s |
-| ----: | ------: | :------------- | :------------ |
-| Mamba1 | NdArray ✅ | `2.6`/`---`/`---`/`---` | `036`/`---`/`---`/`---` |
-| Mamba1 | Flex ✅ | `015`/`---`/`---`/`---` | `029`/`---`/`---`/`---` |
-| Mamba1 | Cpu ⚠️ | `err`/`---`/`---`/`---` | `err`/`---`/`---`/`---` |
-| Mamba1 | Wpgu ⚠️ | `046`/`---`/`---`/`---` | `450`/`---`/`---`/`---` |
-| Mamba1 | Vulkan ⚠️ | `046`/`---`/`---`/`---` | `438`/`---`/`---`/`---` |
-| Mamba1 | Cuda ✅ | `063`/`021`/`021`/`067` | `408`/`177`/`155`/`294` |
-| Mamba1 | Tch/cpu ⚠️ | `009`/`---`/`---`/`---` | `040``---`/`---`/`---` |
-| Mamba2 | NdArray ✅ | `2.6`/`---`/`---`/`---` | `039`/`---`/`---`/`---` |
-| Mamba2 | Flex ✅ | `4.3`/`---`/`---`/`---` | `033`/`---`/`---`/`---` |
-| Mamba2 | Cpu ⚠️ | `err`/`---`/`---`/`---` | `err`/`---`/`---`/`---` |
-| Mamba2 | Wpgu ⚠️ | `036`/`---`/`---`/`---` | `403`/`---`/`---`/`---` |
-| Mamba2 | Vulkan ⚠️ | `043`/`---`/`---`/`---` | `424`/`---`/`---`/`---` |
-| Mamba2 | Cuda ✅ | `056`/`028`/`030`/`058` | `261`/`226`/`138`/`194` |
-| Mamba2 | Tch/cpu ⚠️ | `err`/`---`/`---`/`---` | `040`/`---`/`---`/`---` |
-
 ### Example Outputs
 
 To test for correctness for some backend, I recommend first checking `native`, if sequential matches against parallel, and optionally if they match against the `ndarray` or `flex` backends. Then even if they don't match, you can guess if the results are sensible, that they return coeherent tokens, don't cause panics, etc.
@@ -71,11 +47,15 @@ Mamba is the most popular and well-known of all Mambo songs. It was first record
 
 ### Building Examples
 
-##### Native Mamba2 (Console)
+##### Native (Console)
+
 ```bash
+MAMBA="mamba1" # alternatively, mamba2
 RUSTFLAGS="-C target-cpu=native"
-cargo run --release --no-default-features --features "native,backend-flex,backend-simd,mamba2"
+cargo check --no-default-features --features "native,backend-flex,backend-simd,$MAMBA"
+cargo run --release --no-default-features --features "native,backend-flex,backend-simd,$MAMBA"
 ```
+
 Notes:
 - This will automatically download model weights, load and run them, first in sequential mode and then in parallel mode.
 
@@ -83,24 +63,32 @@ Notes:
 
 Using [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/), [wasm-opt](https://github.com/brson/wasm-opt-rs?tab=readme-ov-file#installing-the-binary) and serving with [miniserve](https://github.com/svenstaro/miniserve/?tab=readme-ov-file#how-to-install).
 
-#### Web Mamba1 (Console Log)
+#### Web (Console Log)
 
 ```bash
-wasm-pack build --release --target web --out-dir "frontend/mamba1/pkg" \
-  --no-default-features --features "backend-flex,backend-simd,mamba1"
+MAMBA="mamba1" # alternatively, mamba2
+TARGET="wasm32-unknown-unknown"
+cargo +nightly check --target="$TARGET" --no-default-features --features "backend-flex,backend-simd,$MAMBA"
+wasm-pack build --release --target web --out-dir "frontend/$MAMBA/pkg" \
+  --no-default-features --features "backend-flex,backend-simd,$MAMBA"
 miniserve -i 127.0.0.1 "frontend/"
 ```
-Then open the page at [http://127.0.0.1:8080/mamba1/index.html](http://127.0.0.1:8080/mamba1/index.html) and open the console logs.
+
+For Mamba-1, then open the page at [http://127.0.0.1:8080/mamba1/index.html](http://127.0.0.1:8080/mamba1/index.html) and open the console logs.
 Note: This will automatically download model weights, load and run them, first in sequential mode and then in parallel mode, similarly to the native console one. Some CPU flags may be required at runtime.
 
-#### Web Mamba2 (Yew UI)
+#### Web (Yew UI)
 
 ```bash
-wasm-pack build --release --target web --out-dir "frontend/mamba2/pkg" --no-opt \
-  --no-default-features --features "backend-flex,backend-simd,yew,mamba2"
+MAMBA="mamba1" # alternatively, mamba2
+TARGET="wasm32-unknown-unknown"
+cargo +nightly check --target="$TARGET" --no-default-features --features "yew,backend-flex,backend-simd,$MAMBA"
+wasm-pack build --release --target web --out-dir "frontend/$MAMBA/pkg" --no-opt \
+  --no-default-features --features "yew,backend-flex,backend-simd,$MAMBA"
 miniserve -i 127.0.0.1 "frontend/"
 ```
-Then open the page at [http://127.0.0.1:8080/mamba2/index.html](http://127.0.0.1:8080/mamba2/index.html).
+
+For Mamba-1, Then open the page at [http://127.0.0.1:8080/mamba1/index.html](http://127.0.0.1:8080/mamba1/index.html).
 Nots:
 - This won't download anything by default, and you must click buttons to download, load and run the model - which is run in sequential mode.
 - `wasm-opt` is disabled for `yew` with `wasm-pack build --no-opt`.
