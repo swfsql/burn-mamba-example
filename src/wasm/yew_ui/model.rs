@@ -1,5 +1,5 @@
 // use crate::safetensors_load;
-use crate::{LogitsProcessorWrapper, MambaCaches, MambaModel, MambaModelConfig, MambaWrapper, hf};
+use crate::{LogitsProcessorWrapper, MambaWrapper, hf};
 use burn::prelude::*;
 use burn_mamba::prelude::*;
 use hf_hub::{
@@ -10,20 +10,15 @@ use hf_hub::{
 use tokenizers::Tokenizer;
 
 #[cfg(feature = "mamba1")]
-pub use burn::prelude::Backend as BackendExt;
-#[cfg(feature = "mamba2")]
-pub use burn_mamba::prelude::Mamba2BackendExt as BackendExt;
-
-#[cfg(feature = "mamba1")]
 use crate::safetensors_load_mamba1;
 
 #[cfg(feature = "mamba2")]
 use crate::safetensors_load_mamba2;
 
-pub struct Model<B: Backend> {
+pub struct Model {
     // general data
     /// Backend device.
-    pub device: B::Device,
+    pub device: Device,
 
     // fetching, loading, building
     /// Can check the cache, fetch and load data.
@@ -33,11 +28,11 @@ pub struct Model<B: Backend> {
     /// Stores cache and load status information, and also loaded bytes data.
     pub mamba: ModelData,
     /// Consumes loaded bytes data to partially build the required models.
-    pub models_wrapper_builder: MambaWrapperBuilder<B>,
+    pub models_wrapper_builder: MambaWrapperBuilder,
 
     // built models
     /// Models that are built and ready to use for inference.
-    pub models_wrapper: Option<Wrapper<B>>,
+    pub models_wrapper: Option<Wrapper>,
 
     // inference-related data
     /// Current user input.
@@ -58,7 +53,7 @@ pub struct Model<B: Backend> {
     pub eos_token: usize,
 }
 
-impl<B: Backend> Model<B> {
+impl Model {
     pub fn select(&self, selection: &ModelSelection) -> &ModelData {
         match selection {
             ModelSelection::Tokenizer => &self.tokenizer,
@@ -74,15 +69,14 @@ impl<B: Backend> Model<B> {
     }
 }
 
-impl<B: Backend> Default for Model<B> {
+impl Default for Model {
     fn default() -> Self {
-        let device = <B::Device>::default();
-        burn::tensor::set_default_dtypes::<B>(
-            &device,
-            crate::PRECISION_FLOAT_D_TYPE, // default float
-            crate::PRECISION_INT_D_TYPE,   // default int
-        )
-        .unwrap();
+        let mut device = Device::default();
+        {
+            device
+                .configure((crate::PRECISION_FLOAT_D_TYPE, crate::PRECISION_INT_D_TYPE))
+                .expect("Failed to install fp32/i32 device defaults");
+        }
 
         Self {
             // general data
@@ -143,45 +137,33 @@ impl<B: Backend> Default for Model<B> {
     }
 }
 
-pub struct MambaWrapperBuilder<B: Backend> {
+pub struct MambaWrapperBuilder {
     pub tokenizer: Option<Tokenizer>,
-    pub mamba: Option<MambaModel<B>>,
-    pub mamba_config: Option<MambaModelConfig>,
+    pub mamba: Option<MambaVocabNet>,
+    pub mamba_config: Option<MambaVocabNetConfig>,
 }
 
-impl<B: Backend> Default for MambaWrapperBuilder<B> {
+impl Default for MambaWrapperBuilder {
     fn default() -> Self {
         MambaWrapperBuilder {
             tokenizer: None,
             mamba: None,
             #[cfg(feature = "mamba1")]
-            mamba_config: Some(MambaModelConfig::Mamba1(Mamba1NetworkConfig::new(
-                hf::mamba1_130m::N_LAYER,
-                hf::mamba1_130m::VOCAB_SIZE,
-                hf::mamba1_130m::PAD_VOCAB_SIZE_MULTIPLE,
-                Mamba1Config::new(hf::mamba1_130m::D_MODEL),
-                true,
-            ))),
+            mamba_config: Some(hf::mamba1_130m::config()),
             #[cfg(feature = "mamba2")]
-            mamba_config: Some(MambaModelConfig::Mamba2(Mamba2NetworkConfig::new(
-                hf::mamba2_130m::N_LAYER,
-                hf::mamba2_130m::VOCAB_SIZE,
-                hf::mamba2_130m::PAD_VOCAB_SIZE_MULTIPLE,
-                Mamba2Config::new(hf::mamba2_130m::D_MODEL),
-                true,
-            ))),
+            mamba_config: Some(hf::mamba2_130m::config()),
         }
     }
 }
 
-impl<B: Backend + BackendExt> MambaWrapperBuilder<B> {
+impl MambaWrapperBuilder {
     pub fn is_ready(&self) -> bool {
         self.tokenizer.is_some() && self.mamba.is_some()
     }
-    pub fn build(self) -> Wrapper<B> {
+    pub fn build(self) -> Wrapper {
         self.into()
     }
-    pub fn with(&mut self, selection: &ModelSelection, data: Vec<u8>, device: &B::Device) {
+    pub fn with(&mut self, selection: &ModelSelection, data: Vec<u8>, device: &Device) {
         match selection {
             ModelSelection::Tokenizer => {
                 let tokenizer = tokenizers::Tokenizer::from_bytes(data)
@@ -195,13 +177,8 @@ impl<B: Backend + BackendExt> MambaWrapperBuilder<B> {
                     let timing = web_time::Instant::now();
                     log::info!("initializing and loading mamba model");
 
-                    #[allow(irrefutable_let_patterns)]
-                    let MambaModelConfig::Mamba1(config) =
-                        self.mamba_config.clone().expect("missing mamba config")
-                    else {
-                        unreachable!()
-                    };
-                    let mamba = safetensors_load_mamba1::<B>(&data, config, &device).unwrap();
+                    let mamba_config = self.mamba_config.clone().expect("missing mamba config");
+                    let mamba = safetensors_load_mamba1(&data, mamba_config, &device).unwrap();
                     log::info!(
                         "mamba initialized and loaded in {}ms",
                         timing.elapsed().as_millis()
@@ -209,7 +186,7 @@ impl<B: Backend + BackendExt> MambaWrapperBuilder<B> {
 
                     mamba
                 };
-                self.mamba = Some(MambaModel::Mamba1(mamba));
+                self.mamba = Some(mamba);
             }
             #[cfg(feature = "mamba2")]
             ModelSelection::Mamba => {
@@ -217,13 +194,8 @@ impl<B: Backend + BackendExt> MambaWrapperBuilder<B> {
                     let timing = web_time::Instant::now();
                     log::info!("initializing and loading mamba model");
 
-                    #[allow(irrefutable_let_patterns)]
-                    let MambaModelConfig::Mamba2(config) =
-                        self.mamba_config.clone().expect("missing mamba config")
-                    else {
-                        unreachable!()
-                    };
-                    let mamba = safetensors_load_mamba2::<B>(&data, config, &device).unwrap();
+                    let mamba_config = self.mamba_config.clone().expect("missing mamba config");
+                    let mamba = safetensors_load_mamba2(&data, mamba_config, &device).unwrap();
                     log::info!(
                         "mamba initialized and loaded in {}ms",
                         timing.elapsed().as_millis()
@@ -231,7 +203,7 @@ impl<B: Backend + BackendExt> MambaWrapperBuilder<B> {
 
                     mamba
                 };
-                self.mamba = Some(MambaModel::Mamba2(mamba));
+                self.mamba = Some(mamba);
             }
         }
     }
@@ -244,8 +216,8 @@ impl<B: Backend + BackendExt> MambaWrapperBuilder<B> {
     }
 }
 
-impl<B: Backend + BackendExt> From<MambaWrapperBuilder<B>> for Wrapper<B> {
-    fn from(value: MambaWrapperBuilder<B>) -> Self {
+impl From<MambaWrapperBuilder> for Wrapper {
+    fn from(value: MambaWrapperBuilder) -> Self {
         match (value.tokenizer, value.mamba, value.mamba_config) {
             (Some(t), Some(m), Some(c)) => {
                 let models = MambaWrapper::new(t, m, c);
@@ -283,14 +255,14 @@ impl<T> Connection<T> {
     }
 }
 
-pub struct Wrapper<B: Backend> {
-    pub models: MambaWrapper<B>,
-    pub caches: MambaCaches<B>,
+pub struct Wrapper {
+    pub models: MambaWrapper,
+    pub caches: MambaCaches,
     pub processor: LogitsProcessorWrapper,
 }
 
-impl<B: Backend + BackendExt> Wrapper<B> {
-    pub fn new(models: MambaWrapper<B>) -> Self {
+impl Wrapper {
+    pub fn new(models: MambaWrapper) -> Self {
         let caches = models.empty_caches(1).unwrap();
         Self {
             models,

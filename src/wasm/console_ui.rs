@@ -1,17 +1,16 @@
-use crate::{LogitsProcessorWrapper, MambaModel, MambaModelConfig, MambaWrapper, hf};
+use crate::{LogitsProcessorWrapper, MambaWrapper, hf};
 use burn::prelude::*;
-use burn_mamba::prelude::*;
 use hf_hub::{
     Repo, RepoType,
     api::wasm::Api,
     types::{FilePath, RepoId, RevisionPath},
 };
 
-pub async fn run<B: Backend>() -> anyhow::Result<()> {
+pub async fn run() -> anyhow::Result<()> {
     #[cfg(feature = "mamba1")]
-    let mut models = models_mamba1::<B>().await?;
+    let mut models = models_mamba1().await?;
     #[cfg(feature = "mamba2")]
-    let mut models = models_mamba2::<B>().await?;
+    let mut models = models_mamba2().await?;
 
     let prompt = "Mamba is the";
     let sample_len = 30;
@@ -38,7 +37,8 @@ pub async fn run<B: Backend>() -> anyhow::Result<()> {
         let mut caches = models.empty_caches(1)?;
 
         while i < sample_len {
-            let next_logits = models.step(tokens[i], Some(&mut caches))?;
+            let (next_logits, next_caches) = models.step(tokens[i], Some(caches))?;
+            caches = next_caches;
             if i == 0 {
                 // reset after the first token gets generated to get a better approximation
                 timing = web_time::Instant::now();
@@ -79,7 +79,7 @@ pub async fn run<B: Backend>() -> anyhow::Result<()> {
 }
 
 #[cfg(feature = "mamba1")]
-pub async fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
+pub async fn models_mamba1() -> anyhow::Result<MambaWrapper> {
     use crate::safetensors_load_mamba1;
 
     let api = Api::new().await?;
@@ -132,21 +132,14 @@ pub async fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
         tokenizer
     };
 
-    let device: B::Device = Default::default();
-    burn::tensor::set_default_dtypes::<B>(
-        &device,
-        crate::PRECISION_FLOAT_D_TYPE, // default float
-        crate::PRECISION_INT_D_TYPE,   // default int
-    )
-    .unwrap();
-
-    let mamba_config = Mamba1NetworkConfig::new(
-        hf::mamba1_130m::N_LAYER,
-        hf::mamba1_130m::VOCAB_SIZE,
-        hf::mamba1_130m::PAD_VOCAB_SIZE_MULTIPLE,
-        Mamba1Config::new(hf::mamba1_130m::D_MODEL),
-        true,
-    );
+    let mut device: Device = Default::default();
+    {
+        device
+            .configure((crate::PRECISION_FLOAT_D_TYPE, crate::PRECISION_INT_D_TYPE))
+            .expect("Failed to install fp32/i32 device defaults");
+    }
+    
+    let mamba_config = hf::mamba1_130m::config();
     let mamba = {
         let timing = web_time::Instant::now();
         log::info!("loading mamba data");
@@ -155,7 +148,7 @@ pub async fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
 
         let timing = web_time::Instant::now();
         log::info!("initializing and loading mamba model");
-        let mamba = safetensors_load_mamba1::<B>(&mamba_bytes, mamba_config.clone(), &device)?;
+        let mamba = safetensors_load_mamba1(&mamba_bytes, mamba_config.clone(), &device)?;
         log::info!(
             "mamba initialized and loaded in {}ms",
             timing.elapsed().as_millis()
@@ -166,17 +159,16 @@ pub async fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
 
     let models = MambaWrapper::new(
         tokenizer,
-        MambaModel::Mamba1(mamba),
-        MambaModelConfig::Mamba1(mamba_config),
+        mamba,
+        mamba_config,
     );
 
     Ok(models)
 }
 
 #[cfg(feature = "mamba2")]
-pub async fn models_mamba2<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
+pub async fn models_mamba2() -> anyhow::Result<MambaWrapper> {
     use crate::safetensors_load_mamba2;
-    use burn_mamba::mamba2;
 
     let api = Api::new().await?;
 
@@ -228,21 +220,14 @@ pub async fn models_mamba2<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
         tokenizer
     };
 
-    let device: B::Device = Default::default();
-    burn::tensor::set_default_dtypes::<B>(
-        &device,
-        crate::PRECISION_FLOAT_D_TYPE, // default float
-        crate::PRECISION_INT_D_TYPE,   // default int
-    )
-    .unwrap();
+    let mut device: Device = Default::default();
+    {
+        device
+            .configure((crate::PRECISION_FLOAT_D_TYPE, crate::PRECISION_INT_D_TYPE))
+            .expect("Failed to install fp32/i32 device defaults");
+    }
 
-    let mamba_config = mamba2::Mamba2NetworkConfig::new(
-        hf::mamba2_130m::N_LAYER,
-        hf::mamba2_130m::VOCAB_SIZE,
-        hf::mamba2_130m::PAD_VOCAB_SIZE_MULTIPLE,
-        mamba2::Mamba2Config::new(hf::mamba2_130m::D_MODEL),
-        true,
-    );
+    let mamba_config = hf::mamba2_130m::config();
     let mamba = {
         let timing = web_time::Instant::now();
         log::info!("loading mamba data");
@@ -251,7 +236,7 @@ pub async fn models_mamba2<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
 
         let timing = web_time::Instant::now();
         log::info!("initializing and loading mamba model");
-        let mamba = safetensors_load_mamba2::<B>(&mamba_bytes, mamba_config.clone(), &device)?;
+        let mamba = safetensors_load_mamba2(&mamba_bytes, mamba_config.clone(), &device)?;
         log::info!(
             "mamba initialized and loaded in {}ms",
             timing.elapsed().as_millis()
@@ -262,8 +247,8 @@ pub async fn models_mamba2<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
 
     let models = MambaWrapper::new(
         tokenizer,
-        MambaModel::Mamba2(mamba),
-        MambaModelConfig::Mamba2(mamba_config),
+        mamba,
+        mamba_config,
     );
 
     Ok(models)

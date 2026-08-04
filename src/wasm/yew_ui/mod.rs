@@ -11,11 +11,6 @@ use indexed_db_futures::web_sys::DomException;
 pub use model::{Connection, Model};
 use yew::prelude::*;
 
-#[cfg(feature = "mamba1")]
-pub use burn::prelude::Backend as BackendExt;
-#[cfg(feature = "mamba2")]
-pub use burn_mamba::prelude::Mamba2BackendExt as BackendExt;
-
 pub enum Msg {
     // Todo,
 
@@ -96,7 +91,7 @@ pub enum Msg {
     ResetCaches,
 }
 
-impl<B: burn::prelude::Backend + BackendExt> Component for model::Model<B> {
+impl Component for model::Model {
     type Message = Msg;
     type Properties = ();
 

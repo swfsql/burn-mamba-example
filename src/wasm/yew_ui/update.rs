@@ -4,14 +4,9 @@ pub use super::model::{self, Connection, Model};
 use hf_hub::{api::wasm::Api, types::TmpFileBlobKey};
 use yew::prelude::*;
 
-#[cfg(feature = "mamba1")]
-pub use burn::prelude::Backend as BackendExt;
-#[cfg(feature = "mamba2")]
-pub use burn_mamba::prelude::Mamba2BackendExt as BackendExt;
-
 const TICK_MILLIS: u32 = 1;
 
-impl<B: burn::prelude::Backend + BackendExt> model::Model<B> {
+impl model::Model {
     pub fn update(&mut self, ctx: &Context<Self>, msg: Msg) -> bool {
         match msg {
             // Msg::Todo => {
@@ -347,12 +342,13 @@ impl<B: burn::prelude::Backend + BackendExt> model::Model<B> {
                 }
                 let models_wrapper = self.models_wrapper.as_mut().unwrap();
                 let models = &mut models_wrapper.models;
-                let next_logits = models
+                let (next_logits, next_caches) = models
                     .step(
                         self.tokens[self.step] as usize,
-                        Some(&mut models_wrapper.caches),
+                        Some(models_wrapper.caches.clone()),
                     )
                     .unwrap();
+                models_wrapper.caches = next_caches;
                 let next_token = models_wrapper
                     .processor
                     .add_logits(self.step, &mut self.tokens, next_logits)

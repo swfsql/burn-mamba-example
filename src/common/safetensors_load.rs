@@ -1,20 +1,20 @@
-#[cfg(feature = "mamba1")]
-use burn_mamba::mamba1;
-
-#[cfg(feature = "mamba2")]
-use burn_mamba::mamba2;
-
 use burn::module::Param;
 use burn::prelude::*;
 use safetensors::SafeTensors;
+use burn_mamba::prelude::*;
 
 #[cfg(feature = "mamba1")]
-pub fn safetensors_load_mamba1<B: Backend>(
+pub fn safetensors_load_mamba1(
     mamba_safetensors_bytes: &[u8],
-    mamba_config: mamba1::network::Mamba1NetworkConfig,
-    device: &B::Device,
-) -> anyhow::Result<mamba1::network::Mamba1Network<B>> {
-    let mut mamba = mamba_config.init::<B>(&device);
+    mamba_config: MambaVocabNetConfig,
+    device: &Device,
+) -> anyhow::Result<MambaVocabNet> {
+    let mut outer_mamba: MambaVocabNet = mamba_config.init(&device);
+    #[allow(unreachable_patterns)]
+    let mamba = match outer_mamba {
+        MambaVocabNet::Mamba1(ref mut inner) => inner,
+        _ => panic!(),
+    };
     let tensors = &safetensors::SafeTensors::deserialize(&mamba_safetensors_bytes)?;
     // log::info!("{:?}", tensors.names());
     //
@@ -35,8 +35,14 @@ pub fn safetensors_load_mamba1<B: Backend>(
         false,
     )?;
 
-    for i in 0..24 {
-        let layer = &mut mamba.layers[i];
+    #[allow(unreachable_patterns)]
+    let n_layers = match mamba_config {
+        MambaVocabNetConfig::Mamba1 {n_real_layers, ..} => n_real_layers,
+        _ => panic!(),
+    };
+
+    for i in 0..n_layers {
+        let layer = &mut mamba.layers.real_layers[i];
         let name = |n: &str| format!("backbone.layers.{i}.{n}");
         load_param_f32_to_f32(
             &mut layer.norm.gamma,
@@ -109,24 +115,29 @@ pub fn safetensors_load_mamba1<B: Backend>(
     let param = mamba.embedding.weight.val();
     let param = param.swap_dims(1, 0);
     // ensure the tensor is contiguous
-    let param: Tensor<B, 2> = Tensor::from_data(param.into_data(), device);
+    let param: Tensor<2> = Tensor::from_data(param.into_data(), device);
 
     mamba.lm_head = Some(burn::nn::Linear {
         weight: Param::from_tensor(param),
         bias: None,
     });
 
-    Ok(mamba)
+    Ok(outer_mamba)
 }
 
 #[allow(dead_code)]
 #[cfg(feature = "mamba2")]
-pub fn safetensors_load_mamba2<B: Backend>(
+pub fn safetensors_load_mamba2(
     mamba_safetensors_bytes: &[u8],
-    mamba_config: mamba2::network::Mamba2NetworkConfig,
-    device: &B::Device,
-) -> anyhow::Result<mamba2::network::Mamba2Network<B>> {
-    let mut mamba = mamba_config.init::<B>(&device);
+    mamba_config: MambaVocabNetConfig,
+    device: &Device,
+) -> anyhow::Result<MambaVocabNet> {
+    let mut outer_mamba: MambaVocabNet = mamba_config.init(&device);
+    #[allow(unreachable_patterns)]
+    let mamba = match outer_mamba {
+        MambaVocabNet::Mamba2(ref mut inner) => inner,
+        _ => panic!(),
+    };
     let tensors = &safetensors::SafeTensors::deserialize(&mamba_safetensors_bytes)?;
     // log::info!("{:?}", tensors.names());
     //
@@ -147,7 +158,13 @@ pub fn safetensors_load_mamba2<B: Backend>(
         false,
     )?;
 
-    for i in 0..24 {
+    #[allow(unreachable_patterns)]
+    let n_layers = match mamba_config {
+        MambaVocabNetConfig::Mamba2 {n_real_layers, ..} => n_real_layers,
+        _ => panic!(),
+    };
+
+    for i in 0..n_layers {
         // note: only real layers are used
         let layer = &mut mamba.layers.real_layers[i];
         let name = |n: &str| format!("backbone.layers.{i}.{n}");
@@ -215,22 +232,22 @@ pub fn safetensors_load_mamba2<B: Backend>(
     let param = mamba.embedding.weight.val();
     let param = param.swap_dims(0, 1);
     // ensure the tensor is contiguous
-    let param: Tensor<B, 2> = Tensor::from_data(param.into_data(), device);
+    let param: Tensor<2> = Tensor::from_data(param.into_data(), device);
 
     mamba.lm_head = Some(burn::nn::Linear {
         weight: Param::from_tensor(param),
         bias: None,
     });
 
-    Ok(mamba)
+    Ok(outer_mamba)
 }
 
 #[allow(dead_code)]
-pub fn load_param_f16_to_f32<B: Backend, const D: usize>(
-    param: &mut Param<Tensor<B, D>>,
+pub fn load_param_f16_to_f32<const D: usize>(
+    param: &mut Param<Tensor<D>>,
     name: String,
     tensors: &SafeTensors,
-    device: &B::Device,
+    device: &Device,
     swap_dims: bool,
 ) -> anyhow::Result<()> {
     let data = tensors.tensor(&name)?.data();
@@ -245,7 +262,7 @@ pub fn load_param_f16_to_f32<B: Backend, const D: usize>(
     }
 
     let shape = param.dims();
-    let tensor: Tensor<B, 1> = Tensor::from_data(data_f32.as_slice(), device);
+    let tensor: Tensor<1> = Tensor::from_data(data_f32.as_slice(), device);
     let tensor = if swap_dims {
         // transpose some linear layers
 
@@ -254,7 +271,7 @@ pub fn load_param_f16_to_f32<B: Backend, const D: usize>(
         temp_shape[1] = shape[0];
         let tensor = tensor.reshape(temp_shape).swap_dims(0, 1);
         // ensure the tensor is contiguous
-        let tensor: Tensor<B, D> = Tensor::from_data(tensor.into_data(), device);
+        let tensor: Tensor<D> = Tensor::from_data(tensor.into_data(), device);
 
         let tensor = tensor.reshape(shape);
         tensor
@@ -267,11 +284,11 @@ pub fn load_param_f16_to_f32<B: Backend, const D: usize>(
 }
 
 #[allow(dead_code)]
-pub fn load_param_f32_to_f32<B: Backend, const D: usize>(
-    param: &mut Param<Tensor<B, D>>,
+pub fn load_param_f32_to_f32<const D: usize>(
+    param: &mut Param<Tensor<D>>,
     name: String,
     tensors: &SafeTensors,
-    device: &B::Device,
+    device: &Device,
     swap_dims: bool,
 ) -> anyhow::Result<()> {
     let data = tensors.tensor(&name)?.data();
@@ -286,7 +303,7 @@ pub fn load_param_f32_to_f32<B: Backend, const D: usize>(
     }
 
     let shape = param.dims();
-    let tensor: Tensor<B, 1> = Tensor::from_data(data_f32.as_slice(), device);
+    let tensor: Tensor<1> = Tensor::from_data(data_f32.as_slice(), device);
     let tensor = if swap_dims {
         // transpose some linear layers
         let mut temp_shape = shape.clone();
@@ -294,7 +311,7 @@ pub fn load_param_f32_to_f32<B: Backend, const D: usize>(
         temp_shape[1] = shape[0];
         let tensor = tensor.reshape(temp_shape).swap_dims(0, 1);
         // ensure the tensor is contiguous
-        let tensor: Tensor<B, D> = Tensor::from_data(tensor.into_data(), device);
+        let tensor: Tensor<D> = Tensor::from_data(tensor.into_data(), device);
         tensor
     } else {
         tensor.reshape(shape)

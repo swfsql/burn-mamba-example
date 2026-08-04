@@ -1,8 +1,7 @@
 #[allow(unused_imports)]
 use crate::Precision;
-use crate::{LogitsProcessorWrapper, MambaModel, MambaModelConfig, MambaWrapper, hf};
+use crate::{LogitsProcessorWrapper, MambaWrapper, hf};
 use burn::prelude::*;
-use burn::tensor::backend::BackendTypes;
 use hf_hub::types::FilePath;
 use hf_hub::{
     Repo, RepoType,
@@ -11,22 +10,6 @@ use hf_hub::{
 };
 use log::info;
 
-// check README for generation speeds
-#[cfg(feature = "backend-ndarray")]
-type MyBackend = burn::backend::NdArray<Precision, i32>;
-#[cfg(feature = "backend-flex")]
-type MyBackend = burn::backend::Flex;
-#[cfg(feature = "backend-cpu")]
-type MyBackend = burn::backend::Cpu<Precision, i32>;
-#[cfg(any(feature = "backend-tch-cpu", feature = "backend-tch-gpu"))]
-type MyBackend = burn::backend::LibTorch<Precision>;
-#[cfg(feature = "backend-wgpu")]
-type MyBackend = burn::backend::Wgpu<Precision, i32>;
-#[cfg(feature = "backend-vulkan")]
-type MyBackend = burn::backend::Vulkan<Precision, i32>;
-#[cfg(feature = "backend-cuda")]
-type MyBackend = burn::backend::Cuda<Precision, i32>;
-
 pub fn main() -> anyhow::Result<()> {
     let () = pretty_env_logger::formatted_timed_builder()
         .filter(Some("burn_mamba_example"), log::LevelFilter::Info)
@@ -34,9 +17,9 @@ pub fn main() -> anyhow::Result<()> {
     info!("init");
 
     #[cfg(feature = "mamba1")]
-    let mut models = models_mamba1::<MyBackend>()?;
+    let mut models = models_mamba1()?;
     #[cfg(feature = "mamba2")]
-    let mut models = models_mamba2::<MyBackend>()?;
+    let mut models = models_mamba2()?;
 
     info!("running in sequential mode (inference-friendly)");
     let sample_len = 80;
@@ -52,13 +35,9 @@ pub fn main() -> anyhow::Result<()> {
 
     info!("running in parallel mode (training-friendly)");
     let sample_len = 20;
-    #[cfg(feature = "mamba1")]
-    let extra_arg = ();
-    #[cfg(feature = "mamba2")]
-    let extra_arg = burn_mamba::prelude::Mamba2SsdPath::Minimal(None);
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
     let (sample_len, start) =
-        models.run_parallel("Mamba is the", sample_len, &mut processor, extra_arg)?;
+        models.run_parallel("Mamba is the", sample_len, &mut processor)?;
     println!();
     let elapsed = start.unwrap().elapsed().as_millis();
     let total_sample_len = (1 + sample_len) * sample_len / 2;
@@ -73,9 +52,8 @@ pub fn main() -> anyhow::Result<()> {
 }
 
 #[cfg(feature = "mamba1")]
-fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
+fn models_mamba1() -> anyhow::Result<MambaWrapper> {
     use crate::safetensors_load_mamba1;
-    use burn_mamba::mamba1;
 
     let start = std::time::Instant::now();
 
@@ -105,13 +83,12 @@ fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
     let tokenizer =
         tokenizers::Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
 
-    let device: <B as BackendTypes>::Device = Default::default();
-    burn::tensor::set_default_dtypes::<B>(
-        &device,
-        crate::PRECISION_FLOAT_D_TYPE, // default float
-        crate::PRECISION_INT_D_TYPE,   // default int
-    )
-    .unwrap();
+    let mut device: Device = Default::default();
+    {
+        device
+            .configure((crate::PRECISION_FLOAT_D_TYPE, crate::PRECISION_INT_D_TYPE))
+            .expect("Failed to install fp32/i32 device defaults");
+    }
 
     let start = std::time::Instant::now();
     info!("started loading the model");
@@ -119,43 +96,35 @@ fn models_mamba1<B: Backend>() -> anyhow::Result<MambaWrapper<B>> {
         let f = std::fs::File::open(mamba_filename)?;
         unsafe { memmap2::MmapOptions::new().map(&f)? }
     };
-    let mamba_config = mamba1::network::Mamba1NetworkConfig::new(
-        hf::mamba1_130m::N_LAYER,
-        hf::mamba1_130m::VOCAB_SIZE,
-        hf::mamba1_130m::PAD_VOCAB_SIZE_MULTIPLE,
-        mamba1::mamba1::Mamba1Config::new(hf::mamba1_130m::D_MODEL),
-        true,
-    );
+
+    let mamba_config = hf::mamba1_130m::config();
+    
     let mamba =
-        safetensors_load_mamba1::<B>(&mamba_safetensors_bytes, mamba_config.clone(), &device)?;
+        safetensors_load_mamba1(&mamba_safetensors_bytes, mamba_config.clone(), &device)?;
     info!("loaded the model in {:?}", start.elapsed());
 
     let models = MambaWrapper::new(
         tokenizer,
-        MambaModel::Mamba1(mamba),
-        MambaModelConfig::Mamba1(mamba_config),
+        mamba,
+        mamba_config,
     );
 
     return Ok(models);
 }
 
 #[cfg(feature = "mamba2")]
-fn models_mamba2<B: Backend>() -> anyhow::Result<MambaWrapper<B>>
-where
-    B: burn_mamba::prelude::Mamba2BackendExt,
+fn models_mamba2() -> anyhow::Result<MambaWrapper>
 {
     use crate::safetensors_load_mamba2;
-    use burn_mamba::mamba2;
 
     let start = std::time::Instant::now();
 
-    let device: <B as BackendTypes>::Device = Default::default();
-    burn::tensor::set_default_dtypes::<B>(
-        &device,
-        crate::PRECISION_FLOAT_D_TYPE, // default float
-        crate::PRECISION_INT_D_TYPE,   // default int
-    )
-    .unwrap();
+    let mut device: Device = Default::default();
+    {
+        device
+            .configure((crate::PRECISION_FLOAT_D_TYPE, crate::PRECISION_INT_D_TYPE))
+            .expect("Failed to install fp32/i32 device defaults");
+    }
 
     let api = Api::new()?;
     let tokenizer_filename = api
@@ -190,31 +159,15 @@ where
             let f = std::fs::File::open(mamba_filename)?;
             unsafe { memmap2::MmapOptions::new().map(&f)? }
         };
-        let mamba_config = mamba2::network::Mamba2NetworkConfig::new(
-            hf::mamba2_130m::N_LAYER,                 // 24
-            hf::mamba2_130m::VOCAB_SIZE,              // 50277
-            hf::mamba2_130m::PAD_VOCAB_SIZE_MULTIPLE, // 16
-            mamba2::mamba2::Mamba2Config::new(
-                hf::mamba2_130m::D_MODEL, // 768
-            )
-            .with_state_rank(128) // default
-            .with_conv_kernel(4) // default
-            .with_expand(2) // default
-            .with_per_head_dim(64) // default; n_heads = 768*2/64 = 24
-            .with_ngroups(1) // default
-            .with_is_norm_before_gate(false)
-            .with_has_proj_bias(false) // default
-            .with_has_conv_bias(true), // default
-            true,
-        );
+        let mamba_config = hf::mamba2_130m::config();
         let mamba =
-            safetensors_load_mamba2::<B>(&mamba_safetensors_bytes, mamba_config.clone(), &device)?;
+            safetensors_load_mamba2(&mamba_safetensors_bytes, mamba_config.clone(), &device)?;
         info!("loaded the model in {:?}", start.elapsed());
 
         let models = MambaWrapper::new(
             tokenizer,
-            MambaModel::Mamba2(mamba),
-            MambaModelConfig::Mamba2(mamba_config),
+            mamba,
+            mamba_config,
         );
 
         models

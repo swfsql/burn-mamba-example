@@ -4,12 +4,7 @@ pub use super::model::{self, Connection, Model};
 use crate::wasm::yew_ui::model::ModelData;
 use yew::prelude::*;
 
-#[cfg(feature = "mamba1")]
-pub use burn::prelude::Backend as BackendExt;
-#[cfg(feature = "mamba2")]
-pub use burn_mamba::prelude::Mamba2BackendExt as BackendExt;
-
-impl<B: burn::prelude::Backend + BackendExt> model::Model<B> {
+impl model::Model {
     pub fn view(&self, ctx: &Context<Self>) -> Html {
         let link = ctx.link();
 

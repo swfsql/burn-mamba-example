@@ -2,12 +2,8 @@ mod safetensors_load;
 pub mod token_output_stream;
 
 #[cfg(feature = "mamba1")]
-use burn_mamba::mamba1;
-#[cfg(feature = "mamba1")]
 pub use safetensors_load::safetensors_load_mamba1;
 
-#[cfg(feature = "mamba2")]
-use burn_mamba::mamba2;
 #[cfg(feature = "mamba2")]
 pub use safetensors_load::safetensors_load_mamba2;
 
@@ -18,19 +14,15 @@ use token_output_stream::*;
 #[allow(unused_imports)]
 use tokenizers::Tokenizer;
 
-#[cfg(feature = "mamba1")]
-pub use burn::prelude::Backend as BackendExt;
-#[cfg(feature = "mamba2")]
-pub use burn_mamba::prelude::Mamba2BackendExt as BackendExt;
-
-use burn::tensor::DType;
 use candle_transformers::generation::LogitsProcessor;
 pub use safetensors_load::load_param_f32_to_f32;
+use burn_mamba::prelude::*;
 
 #[allow(unused_imports)]
 pub type Precision = f32;
-pub const PRECISION_FLOAT_D_TYPE: DType = DType::F32;
-pub const PRECISION_INT_D_TYPE: DType = DType::I32;
+use burn::tensor::{FloatDType, IntDType};
+pub const PRECISION_FLOAT_D_TYPE: FloatDType = FloatDType::F32;
+pub const PRECISION_INT_D_TYPE: IntDType = IntDType::I32;
 pub const CANDLE_PRECISION_FLOAT_D_TYPE: candle_core::DType = candle_core::DType::F32;
 
 pub mod hf {
@@ -48,6 +40,8 @@ pub mod hf {
     pub mod mamba1_130m {
         #[allow(unused_imports)]
         use hf_hub::types::{FilePath, RepoId, RevisionPath};
+        use burn_mamba::mamba1;
+        use burn_mamba::prelude::*;
 
         /// A [RepoId].
         pub const REPO_ID: &str = "state-spaces/mamba-130m";
@@ -64,12 +58,35 @@ pub mod hf {
         pub const PAD_VOCAB_SIZE_MULTIPLE: usize = 8;
         pub const N_LAYER: usize = 24;
         pub const D_MODEL: usize = 768;
+
+        pub fn config() -> MambaVocabNetConfig {
+            MambaVocabNetConfig::Mamba1 {
+                n_real_layers: N_LAYER, // 24
+                n_virtual_layers: None,
+                vocab_size: VOCAB_SIZE, // 50277
+                pad_vocab_size_multiple: PAD_VOCAB_SIZE_MULTIPLE, // 8
+                missing_lm_head: true,
+                ignore_first_residual: false,
+                ignore_last_residual: false,
+                residuals: ResidualsConfig::Standard,
+                mamba_block: mamba1::prelude::Mamba1Config::new(
+                    D_MODEL, // 768
+                )
+                .with_state_rank(16) // default
+                .with_conv_kernel(4) // default
+                .with_expand(2) // default
+                .with_has_proj_bias(false) // default
+                .with_has_conv_bias(true) // default
+            }
+        }
     }
 
     #[cfg(feature = "mamba2")]
     pub mod mamba2_130m {
         #[allow(unused_imports)]
         use hf_hub::types::{FilePath, RepoId, RevisionPath};
+        use burn_mamba::mamba2;
+        use burn_mamba::prelude::*;
 
         /// A [RepoId].
         pub const REPO_ID: &str = "state-spaces/mamba2-130m";
@@ -86,14 +103,38 @@ pub mod hf {
         pub const PAD_VOCAB_SIZE_MULTIPLE: usize = 16;
         pub const N_LAYER: usize = 24;
         pub const D_MODEL: usize = 768;
+
+        pub fn config() -> MambaVocabNetConfig {
+            MambaVocabNetConfig::Mamba2 {
+                n_real_layers: N_LAYER, // 24
+                n_virtual_layers: None,
+                vocab_size: VOCAB_SIZE, // 50277
+                pad_vocab_size_multiple: PAD_VOCAB_SIZE_MULTIPLE, // 16
+                missing_lm_head: true,
+                ignore_first_residual: false,
+                ignore_last_residual: false,
+                residuals: ResidualsConfig::Standard,
+                mamba_block: mamba2::prelude::Mamba2Config::new(
+                    D_MODEL, // 768
+                )
+                .with_state_rank(128) // default
+                .with_conv_kernel(4) // default
+                .with_expand(2) // default
+                .with_per_head_dim(64) // default; n_heads = 768*2/64 = 24
+                .with_ngroups(1) // default
+                .with_is_norm_before_gate(false)
+                .with_has_proj_bias(false) // default
+                .with_has_conv_bias(true) // default
+            }
+        }
     }
 }
 
 #[cfg(any(feature = "mamba1", feature = "mamba2"))]
-pub struct MambaWrapper<B: Backend> {
+pub struct MambaWrapper {
     pub tokenizer: TokenOutputStream,
-    pub mamba: MambaModel<B>,
-    pub mamba_config: MambaModelConfig,
+    pub mamba: MambaVocabNet,
+    pub mamba_config: MambaVocabNetConfig,
 }
 
 pub struct LogitsProcessorWrapper {
@@ -102,17 +143,10 @@ pub struct LogitsProcessorWrapper {
     repeat_last_n: usize,
 }
 
-#[cfg(feature = "mamba1")]
-type ExtraArg = ();
-#[cfg(feature = "mamba2")]
-type ExtraArg = burn_mamba::prelude::Mamba2SsdPath;
-
 #[cfg(any(feature = "mamba1", feature = "mamba2"))]
-impl<B: Backend> MambaWrapper<B>
-where
-    B: BackendExt,
+impl MambaWrapper
 {
-    pub fn new(tokenizer: Tokenizer, mamba: MambaModel<B>, mamba_config: MambaModelConfig) -> Self {
+    pub fn new(tokenizer: Tokenizer, mamba: MambaVocabNet, mamba_config: MambaVocabNetConfig) -> Self {
         Self {
             tokenizer: TokenOutputStream::new(tokenizer),
             mamba,
@@ -142,9 +176,9 @@ where
     }
 
     /// Initializes a list of empty (zero, null) [burn_mamba::step::MambaBlockCache] for a cached run.
-    pub fn empty_caches(&self, batch: usize) -> anyhow::Result<MambaCaches<B>> {
-        let device = self.mamba.device();
-        let caches = MambaCaches::<B>::empty_caches(batch, &self.mamba_config, &device);
+    pub fn empty_caches(&self, batch: usize) -> anyhow::Result<MambaCaches> {
+        let device = device(&self.mamba);
+        let caches = empty_caches(batch, &self.mamba_config, &device);
         Ok(caches)
     }
 
@@ -157,11 +191,10 @@ where
         prompt: &str,
         sample_len: usize,
         logits_processor_config: &mut LogitsProcessorWrapper,
-        extra_arg: ExtraArg,
     ) -> anyhow::Result<(usize, Option<std::time::Instant>)> {
         use std::io::Write;
         let (mut tokens, eos_token) = self.reset_prompt(prompt)?;
-        let device = self.mamba.device();
+        let device = device(&self.mamba);
 
         // prints the first token (if present), as this is used as *input* to the model
         if let Some(t) = tokens.first() {
@@ -174,10 +207,11 @@ where
         let mut instant = None;
         let mut i = 0;
         'outer: while i < sample_len {
-            let input: Tensor<B, 1, Int> = Tensor::from_data(tokens.as_slice(), &device);
+            let input: Tensor<1, Int> = Tensor::from_data(tokens.as_slice(), &device);
             let input = input.unsqueeze();
 
-            let logits_list = self.mamba.forward(input, extra_arg.clone());
+            let ssd_path = ssd_path(&self.mamba_config);
+            let (logits_list, _caches) = self.mamba.forward(input, None, ssd_path);
             if i == 0 {
                 instant = Some(std::time::Instant::now());
             }
@@ -258,7 +292,8 @@ where
         let mut instant = None;
         let mut i = 0;
         while i < sample_len {
-            let next_logits = self.step(tokens[i], Some(&mut caches))?;
+            let (next_logits, new_caches) = self.step(tokens[i], Some(caches))?;
+            caches = new_caches;
             if i == 0 {
                 instant = Some(std::time::Instant::now());
             }
@@ -289,15 +324,13 @@ where
     pub fn step(
         &self,
         input: usize,
-        mut caches: Option<&mut MambaCaches<B>>,
-    ) -> anyhow::Result<candle_core::Tensor> {
-        let device = self.mamba.device();
+        caches: Option<MambaCaches>,
+    ) -> anyhow::Result<(candle_core::Tensor, MambaCaches)> {
+        let device = device(&self.mamba);
         let input = Tensor::from_data([input], &device);
-        let caches_owned = std::mem::take(&mut caches).unwrap();
 
-        let (logits, new_caches) = self.mamba.step(input, caches_owned.clone());
+        let (logits, new_caches) = self.mamba.step(input, caches, None, None);
         assert_eq!([1, self.padded_vocab_size()], logits.dims());
-        *caches_owned = new_caches;
 
         let shape = (self.padded_vocab_size(),);
 
@@ -309,11 +342,11 @@ where
 
         let logits = candle_core::Tensor::from_vec(logits, shape, &candle_core::Device::Cpu)?
             .to_dtype(CANDLE_PRECISION_FLOAT_D_TYPE)?;
-        Ok(logits)
+        Ok((logits, new_caches))
     }
 
     pub fn padded_vocab_size(&self) -> usize {
-        self.mamba_config.padded_vocab_size()
+        padded_vocab_size(&self.mamba_config)
     }
 }
 
@@ -376,187 +409,63 @@ impl LogitsProcessorWrapper {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum MambaVersion {
-    #[cfg(feature = "mamba1")]
-    Mamba1,
-    #[cfg(feature = "mamba2")]
-    Mamba2,
-}
-
 #[cfg(any(feature = "mamba1", feature = "mamba2"))]
-#[derive(Debug)]
-pub enum MambaModel<B: Backend> {
-    #[cfg(feature = "mamba1")]
-    Mamba1(mamba1::network::Mamba1Network<B>),
-    #[cfg(feature = "mamba2")]
-    Mamba2(mamba2::network::Mamba2Network<B>),
-}
-
-#[cfg(any(feature = "mamba1", feature = "mamba2"))]
-#[derive(Clone, Debug)]
-pub enum MambaModelConfig {
-    #[cfg(feature = "mamba1")]
-    Mamba1(mamba1::network::Mamba1NetworkConfig),
-    #[cfg(feature = "mamba2")]
-    Mamba2(mamba2::network::Mamba2NetworkConfig),
-}
-
-#[cfg(any(feature = "mamba1", feature = "mamba2"))]
-#[derive(Clone, Debug)]
-pub enum MambaCaches<B: Backend> {
-    #[cfg(feature = "mamba1")]
-    Mamba1(mamba1::cache::Mamba1Caches<B>),
-    #[cfg(feature = "mamba2")]
-    Mamba2(mamba2::cache::Mamba2Caches<B>),
-}
-
-#[cfg(any(feature = "mamba1", feature = "mamba2"))]
-impl<B: Backend> MambaModel<B>
-where
-    B: BackendExt,
-{
-    pub fn version(&self) -> MambaVersion {
-        match self {
-            #[cfg(feature = "mamba1")]
-            Self::Mamba1(_m) => MambaVersion::Mamba1,
-            #[cfg(feature = "mamba2")]
-            Self::Mamba2(_m) => MambaVersion::Mamba2,
-        }
-    }
-    pub fn device(&self) -> B::Device {
-        match self {
-            #[cfg(feature = "mamba1")]
-            Self::Mamba1(m) => m.embedding.weight.device(),
-            #[cfg(feature = "mamba2")]
-            Self::Mamba2(m) => m.embedding.weight.device(),
-        }
-    }
-    pub fn layers_len(&self) -> usize {
-        match self {
-            #[cfg(feature = "mamba1")]
-            Self::Mamba1(m) => m.layers.len(),
-            #[cfg(feature = "mamba2")]
-            Self::Mamba2(m) => m.layers.n_real_layers,
-        }
-    }
-    /// `mamba2_chunk_size`: Chunk size for Mamba2 selective scan. No effect for Mamba1.
-    pub fn forward(&self, x: Tensor<B, 2, Int>, extra_arg: ExtraArg) -> Tensor<B, 3> {
-        let res = match self {
-            #[cfg(feature = "mamba1")]
-            Self::Mamba1(m) => m.forward(x),
-            #[cfg(feature = "mamba2")]
-            Self::Mamba2(m) => {
-                // note: this always from the start, from empty caches
-                let (y, _cache) = m.forward(
-                    x,
-                    None,
-                    // mamba2_chunk_size.map(|n| burn_mamba::mamba2::mamba2::SsdPath::Core(n))
-                    extra_arg.clone(),
-                );
-                y
-            }
-        };
-        let _extra_arg = extra_arg;
-        res
-    }
-    pub fn step(
-        &self,
-        x: Tensor<B, 1, Int>,
-        caches: MambaCaches<B>,
-    ) -> (Tensor<B, 2>, MambaCaches<B>) {
-        #[allow(irrefutable_let_patterns)]
-        match self {
-            #[cfg(feature = "mamba1")]
-            Self::Mamba1(m) => {
-                let MambaCaches::Mamba1(caches) = caches else {
-                    unreachable!()
-                };
-                let (logits, new_caches) = m.step(x, caches.clone());
-                let new_caches = MambaCaches::Mamba1(new_caches);
-                (logits, new_caches)
-            }
-            #[cfg(feature = "mamba2")]
-            Self::Mamba2(m) => {
-                let MambaCaches::Mamba2(caches) = caches else {
-                    unreachable!()
-                };
-                let (logits, new_caches) = m.step(x, Some(caches.clone()));
-                let new_caches = MambaCaches::Mamba2(new_caches);
-                (logits, new_caches)
-            }
-        }
+pub fn device(model: &MambaVocabNet) -> Device {
+    match model {
+        #[cfg(feature = "mamba1")]
+        MambaVocabNet::Mamba1(m) => m.embedding.weight.device(),
+        #[cfg(feature = "mamba2")]
+        MambaVocabNet::Mamba2(m) => m.embedding.weight.device(),
     }
 }
 
 #[cfg(any(feature = "mamba1", feature = "mamba2"))]
-impl MambaModelConfig {
-    pub fn version(&self) -> MambaVersion {
-        match self {
-            #[cfg(feature = "mamba1")]
-            Self::Mamba1(_config) => MambaVersion::Mamba1,
-            #[cfg(feature = "mamba2")]
-            Self::Mamba2(_config) => MambaVersion::Mamba2,
+#[allow(irrefutable_let_patterns)]
+pub fn padded_vocab_size(config: &MambaVocabNetConfig) -> usize {
+    let (vocab_size, pad_vocab_size_multiple) = 
+    match config {
+        #[cfg(feature = "mamba1")]
+        MambaVocabNetConfig::Mamba1{vocab_size, pad_vocab_size_multiple, ..} => {
+            (vocab_size, pad_vocab_size_multiple)
         }
-    }
-    pub fn padded_vocab_size(&self) -> usize {
-        #[allow(irrefutable_let_patterns)]
-        match self {
-            #[cfg(feature = "mamba1")]
-            Self::Mamba1(_config) => {
-                use hf::mamba1_130m as m;
-                if m::VOCAB_SIZE % m::PAD_VOCAB_SIZE_MULTIPLE == 0 {
-                    m::VOCAB_SIZE
-                } else {
-                    ((m::VOCAB_SIZE / m::PAD_VOCAB_SIZE_MULTIPLE) + 1) * m::PAD_VOCAB_SIZE_MULTIPLE
-                }
-            }
-
-            #[cfg(feature = "mamba2")]
-            Self::Mamba2(_config) => {
-                use hf::mamba2_130m as m;
-                if m::VOCAB_SIZE % m::PAD_VOCAB_SIZE_MULTIPLE == 0 {
-                    m::VOCAB_SIZE
-                } else {
-                    ((m::VOCAB_SIZE / m::PAD_VOCAB_SIZE_MULTIPLE) + 1) * m::PAD_VOCAB_SIZE_MULTIPLE
-                }
-            }
+        #[cfg(feature = "mamba2")]
+        MambaVocabNetConfig::Mamba2{vocab_size, pad_vocab_size_multiple, ..} => {
+            (vocab_size, pad_vocab_size_multiple)
         }
+    };
+    
+    if vocab_size % pad_vocab_size_multiple == 0 {
+        *vocab_size
+    } else {
+        ((vocab_size / pad_vocab_size_multiple) + 1) * pad_vocab_size_multiple
     }
 }
 
 #[cfg(any(feature = "mamba1", feature = "mamba2"))]
-impl<B: Backend> MambaCaches<B> {
-    pub fn empty_caches(batch: usize, mamba_config: &MambaModelConfig, device: &B::Device) -> Self {
-        let mamba_version = mamba_config.version();
-        #[allow(irrefutable_let_patterns)]
-        match mamba_version {
-            #[cfg(feature = "mamba1")]
-            MambaVersion::Mamba1 => {
-                let MambaModelConfig::Mamba1(config) = mamba_config else {
-                    unreachable!()
-                };
-                let caches = mamba1::cache::Mamba1CachesConfig::new_from_block_config(
-                    config.n_layer,
-                    batch,
-                    config.mamba_block.clone(),
-                )
+pub fn empty_caches(batch: usize, mamba_config: &MambaVocabNetConfig, device: &Device) -> MambaCaches {
+    match mamba_config {
+        #[cfg(feature = "mamba1")]
+        MambaVocabNetConfig::Mamba1 {n_real_layers, mamba_block, ..} => {
+            let caches = Mamba1CachesConfig::new_from_block_config(*n_real_layers, batch, mamba_block.clone())
                 .init(device);
-                MambaCaches::Mamba1(caches)
-            }
-            #[cfg(feature = "mamba2")]
-            MambaVersion::Mamba2 => {
-                let MambaModelConfig::Mamba2(config) = mamba_config else {
-                    unreachable!()
-                };
-                let caches = mamba2::cache::Mamba2CachesConfig::new_from_block_config(
-                    config.n_real_layers,
-                    batch,
-                    config.mamba_block.clone(),
-                )
-                .init(device);
-                MambaCaches::Mamba2(caches)
-            }
+            MambaCaches::Mamba1(caches)
         }
+        #[cfg(feature = "mamba2")]
+        MambaVocabNetConfig::Mamba2 {n_real_layers, mamba_block, ..} => {
+            let caches = 
+            Mamba2CachesConfig::new_from_block_config(*n_real_layers, batch, mamba_block.clone())
+                .init(device);
+            MambaCaches::Mamba2(caches)
+        }
+    }
+}
+
+#[cfg(any(feature = "mamba1", feature = "mamba2"))]
+pub fn ssd_path(mamba_config: &MambaVocabNetConfig) -> MambaSsdPath {
+    match mamba_config {
+        #[cfg(feature = "mamba1")]
+        MambaVocabNetConfig::Mamba1 {..} => MambaSsdPath::Mamba1,
+        #[cfg(feature = "mamba2")]
+        MambaVocabNetConfig::Mamba2 {..} => MambaSsdPath::Mamba2(Mamba2SsdPath::SerialRecalculated(None)),
     }
 }
