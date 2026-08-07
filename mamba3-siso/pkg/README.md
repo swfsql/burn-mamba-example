@@ -1,121 +1,253 @@
 # burn-mamba-example
 
-Run a pretrained Mamba language model in your browser:
+> Run a pretrained **Mamba** language model in your browser — or natively — on the
+> [Burn](https://github.com/tracel-ai/burn) deep learning framework.
 
-- [130m Mamba-1](https://swfsql.github.io/burn-mamba-example/mamba1) ([weights](https://huggingface.co/state-spaces/mamba-130m/))
-- [130m Mamba-2](https://swfsql.github.io/burn-mamba-example/mamba2) ([weights](https://huggingface.co/state-spaces/mamba2-130m/))
-- [187m Mamba-3 SISO](https://swfsql.github.io/burn-mamba-example/mamba3-siso) ([weights](https://huggingface.co/state-spaces/mamba3-siso-187m))
-- [187m Mamba-3 MIMO](https://swfsql.github.io/burn-mamba-example/mamba3-mimo) ([weights](https://huggingface.co/state-spaces/mamba3-mimo-187m))
+A small demo app around [`burn-mamba`](https://github.com/swfsql/burn-mamba): it
+downloads an official `state-spaces` checkpoint from HuggingFace, loads the
+safetensors into Burn modules, and generates text. The same code compiles to a
+native binary and to WebAssembly, so the **whole model runs client-side** in the
+browser — no inference server, no API key.
 
-### Information
+## Live demos
 
-Mamba-1 adapted from [huggingface/candle/mamba-minimal](https://github.com/huggingface/candle/blob/fd7c8565646039e35925b8730d27ddad195d7e73/candle-examples/examples/mamba-minimal/) and Mamba-2 adapted from [mamba-2-minimal](https://github.com/tommyip/mamba2-minimal). This utilizes [burn-mamba](https://github.com/swfsql/burn-mamba) block definitions.
+| Model | Params | Weights | Tokenizer | Try it |
+|---|---|---|---|---|
+| Mamba-1 | 130m | [493MB (f32)](https://huggingface.co/state-spaces/mamba-130m/) | GPT-NeoX, 2MB | [▶ mamba1](https://swfsql.github.io/burn-mamba-example/mamba1) |
+| Mamba-2 | 130m | [247MB (f16)](https://huggingface.co/state-spaces/mamba2-130m/) | GPT-NeoX, 2MB | [▶ mamba2](https://swfsql.github.io/burn-mamba-example/mamba2) |
+| Mamba-3 SISO | 187m | [357MB (bf16)](https://huggingface.co/state-spaces/mamba3-siso-187m) | Llama-3.1, 17MB | [▶ mamba3-siso](https://swfsql.github.io/burn-mamba-example/mamba3-siso) |
+| Mamba-3 MIMO | 187m | [358MB (bf16)](https://huggingface.co/state-spaces/mamba3-mimo-187m) | Llama-3.1, 17MB | [▶ mamba3-mimo](https://swfsql.github.io/burn-mamba-example/mamba3-mimo) |
 
-### Features
+Everything is materialised as **f32** at load time, so one code path serves all
+three stored dtypes. The browser pages fetch on demand and cache into IndexedDB
+in 10MB chunks, so a download resumes across reloads and can be erased from the
+page.
 
-- "default" or "empty": nothing is enabled and the "common" mod is exported as a library.
-- Target:
-  - ✅ `native`: local executable.
-  - ✅ "empty": web console wasm if rustc target is wasm. Can use `yew` for a web wasm UI.
-- Model (for executables, only one can be selected):
-  - ✅ `mamba1`: Mamba-1 130m.
-  - ✅ `mamba2`: Mamba-2 130m.
-  - ✅ `mamba3-siso`: Mamba-3 SISO 187m.
-  - ✅ `mamba3-mimo`: Mamba-3 MIMO 187m (`mimo_rank: 4`).
+## Highlights
 
-  The two Mamba-3 checkpoints interleave a SwiGLU MLP with each mixer
-  (`d_intermediate > 0`) and use the Llama-3.1 tokenizer rather than GPT-NeoX, so
-  they download a larger `tokenizer.json` (~17MB) alongside ~750MB of weights.
-- Burn backend:
-  - ✅ `ndarray`: used for dev or wasm. Correct for both sequential and parallel modes. Can use `simd` for extra speed.
-  - ✅ `flex`: used for dev or wasm. Correct for both sequential and parallel modes. Can use `simd` for extra speed.
-  - ⚠️ `cpu`: for cpu backend. Correct for both sequential and parallel modes. May stack overflow.
-  - ⚠️ `wgpu`: for webgpu backend. Wrong for both sequential and parallel modes.
-  - ⚠️ `vulkan`: for vulkan backend. Wrong for both sequential and parallel modes.
-  - ✅ `cuda`: for cuda backend. Correct for both sequential and parallel modes.
-  - ⚠️ `tch`: for pytorch backend. Wrong for both sequential and parallel modes.
-- Extra burn features:
- - ✅ `fusion`: enable the fusion feature. May be counter-productive for some cases.
- - ✅ `autotune`: enable the autotune feature. May be counter-productive for some cases.
+- **Full client-side inference** — weights, tokenizer, sampling and generation all
+  run in the browser via WASM.
+- **Four checkpoints, one codebase** — Mamba-1/2 130m and both Mamba-3 187m
+  topologies, differing only in data (`ModelSpec`), not in `#[cfg]` branches.
+- **Both execution modes** — a recurrent `step()` for decoding and a chunkwise
+  `forward()` over the whole prompt; running both on one prompt is how this repo
+  checks a backend (see [Verifying a backend](#verifying-a-backend)).
+- **Few dependencies** — the HuggingFace client, the `tokenizer.json` pipeline and
+  the sampler are all local modules; weight loading goes through `burn-store`.
+  No `candle`, no `tokenizers`, no `hf-hub`.
+- **Backend-agnostic** — pick the backend with a cargo feature; Burn's Dispatch
+  backend means no `<B>` generic anywhere in the source.
 
-Note: Please check Cargo.toml for more info.
-
-### Example Outputs
-
-To test for correctness for some backend, I recommend first checking `native`, if sequential matches against parallel, and optionally if they match against the `ndarray` or `flex` backends. Then even if they don't match, you can guess if the results are sensible, that they return coeherent tokens, don't cause panics, etc.
-
-The following are my results from different backends (native ndarray/flex, native wgpu + cuda, wasm ndarray/flex), with sequential and parallel always matching.
-
-Mamba-1:
-```
-Mamba is the most popular and best-selling game in the world. It has been downloaded more than 1,000 times by over 1 million people worldwide since its release on March 18th 2016...
-```
-
-Mamba-2:
-```
-Mamba is the most popular and well-known of all Mambo songs. It was first recorded by a group called The Natives in 1883, but it has been covered many times since then with...
-```
-
-Mamba-3 SISO:
-```
-Mamba is the name of a genus of venomous snakes found in Africa. It has been used as a medicine for centuries, and its bite can cause severe pain and swelling...
-```
-
-Mamba-3 MIMO:
-```
-Mamba is the name of a tribe in the Mambilla region of Tanzania. They are known for their traditional hunting and fishing techniques, which they use to catch fish from...
-```
-
-### Building Examples
-
-##### Native (Console)
+## Quick start
 
 ```bash
-MAMBA="mamba1" # alternatively mamba2, mamba3-siso, mamba3-mimo
-RUSTFLAGS="-C target-cpu=native"
+# native: downloads the weights on first run, then generates
+RUSTFLAGS="-C target-cpu=native" cargo run --release --no-default-features \
+  --features "native,backend-flex,backend-simd,mamba2"
+```
+
+The run prints the generated text twice — once decoded sequentially, once
+computed in parallel — plus timings for each.
+
+## Features are the configuration
+
+`default = []` builds the bare crate as a library (just `common/`). **Every useful
+build is a `--no-default-features --features "…"` combination** of one *target* ×
+one or more *models* × one *backend*:
+
+| Axis | Choices |
+|---|---|
+| target | `native` (binary) · *nothing* (wasm console log) · `yew` (wasm UI) |
+| model | `mamba1` · `mamba2` · `mamba3-siso` · `mamba3-mimo` — **any combination** |
+| backend | `backend-{flex,ndarray,cpu,wgpu,vulkan,cuda,tch-cpu,tch-gpu}` |
+| extras | `backend-simd` · `backend-fusion` · `backend-autotune` |
+
+Model features **combine**. A binary or wasm bundle carries every checkpoint
+enabled at compile time and runs a single one — the highest priority, which is
+`mamba3-mimo` > `mamba3-siso` > `mamba2` > `mamba1`. The native binary logs which
+one it picked along with everything compiled in, and `MAMBA_MODEL=<id>` overrides
+the pick:
+
+```bash
+# one binary with every model; runs mamba3-mimo unless told otherwise
+cargo run --release --no-default-features \
+  --features "native,backend-flex,backend-simd,mamba1,mamba2,mamba3-siso,mamba3-mimo"
+MAMBA_MODEL=mamba1 cargo run --release --no-default-features \
+  --features "native,backend-flex,backend-simd,mamba1,mamba2,mamba3-siso,mamba3-mimo"
+```
+
+`mamba3-siso` and `mamba3-mimo` both imply `mamba3`, which enables the blocks in
+`burn-mamba`. `mamba3` **alone is library-only** — it names no checkpoint (the two
+differ in `mimo_rank`, `d_intermediate` and `chunk_size`), and the entry points
+`compile_error!` without one.
+
+When several backends are compiled in, `BURN_DEVICE` chooses at runtime.
+
+## Backend support
+
+Correctness here means: sequential and parallel agree with each other **and** with
+the `flex`/`ndarray` reference.
+
+| Backend | Feature | Status |
+|---|---|---|
+| Flex | `backend-flex` | ✅ correct — recommended for dev and wasm |
+| NdArray | `backend-ndarray` | ✅ correct — alternative for dev and wasm |
+| CUDA | `backend-cuda` | ✅ correct |
+| CPU | `backend-cpu` | ⚠️ correct, but may stack-overflow |
+| WGPU | `backend-wgpu` | ⚠️ wrong in both modes |
+| Vulkan | `backend-vulkan` | ⚠️ wrong in both modes |
+| LibTorch | `backend-tch-cpu` / `backend-tch-gpu` | ⚠️ wrong in both modes |
+
+`backend-simd` adds SIMD to the CPU backends. `backend-fusion` and
+`backend-autotune` are Burn-level extras — both can be counter-productive
+depending on the case, which is what the [benchmarks](#benchmarks) measure.
+
+### Verifying a backend
+
+The native binary deliberately runs **sequential, then parallel**, on the same
+prompt. If the two texts agree, the backend is sound for both paths; cross-check
+against `flex` or `ndarray` for absolute correctness. Even when they disagree, the
+output is informative — coherent tokens, no panics, sensible punctuation.
+
+## Building
+
+### Native (console)
+
+```bash
+MAMBA="mamba2"  # or mamba1, mamba3-siso, mamba3-mimo, or several comma-separated
+export RUSTFLAGS="-C target-cpu=native"
 cargo check --no-default-features --features "native,backend-flex,backend-simd,$MAMBA"
 cargo run --release --no-default-features --features "native,backend-flex,backend-simd,$MAMBA"
 ```
 
-Notes:
-- This will automatically download model weights, load and run them, first in sequential mode and then in parallel mode.
-- Weights and the tokenizer are cached under `$HF_HOME/hub` (by default `~/.cache/huggingface/hub`), in the same layout the HuggingFace tools use - so an already populated cache is reused.
+Weights and tokenizer are cached under `$HF_HOME/hub` (default
+`~/.cache/huggingface/hub`) in exactly the layout the HuggingFace tools use, so an
+already-populated cache is reused and nothing is re-downloaded.
 
-##### WASM
+### WASM
 
-Using [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/), [wasm-opt](https://github.com/brson/wasm-opt-rs?tab=readme-ov-file#installing-the-binary) and serving with [miniserve](https://github.com/svenstaro/miniserve/?tab=readme-ov-file#how-to-install).
+Needs [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/), a nightly
+toolchain with the `wasm32-unknown-unknown` target, and something to serve the
+files — e.g. [miniserve](https://github.com/svenstaro/miniserve).
 
-#### Web (Console Log)
+**Web console log** — no UI; fetches, loads and generates into the browser console:
 
 ```bash
-MAMBA="mamba1" # alternatively mamba2, mamba3-siso, mamba3-mimo
-TARGET="wasm32-unknown-unknown"
-cargo +nightly check --target="$TARGET" --no-default-features --features "backend-flex,backend-simd,$MAMBA"
+MAMBA="mamba2"
+cargo +nightly check --target wasm32-unknown-unknown --no-default-features \
+  --features "backend-flex,backend-simd,$MAMBA"
 wasm-pack build --release --target web --out-dir "frontend/$MAMBA/pkg" \
   --no-default-features --features "backend-flex,backend-simd,$MAMBA"
-miniserve -i 127.0.0.1 "frontend/"
+miniserve -i 127.0.0.1 "frontend/"   # then open /mamba2/index.html
 ```
 
-For Mamba-1, then open the page at [http://127.0.0.1:8080/mamba1/index.html](http://127.0.0.1:8080/mamba1/index.html) and open the console logs.
-Note: This will automatically download model weights, load and run them, first in sequential mode and then in parallel mode, similarly to the native console one. Some CPU flags may be required at runtime.
-
-#### Web (Yew UI)
+**Web Yew UI** — the interactive page, with per-asset fetch / erase / load / unload
+controls and a prompt box:
 
 ```bash
-MAMBA="mamba1" # alternatively mamba2, mamba3-siso, mamba3-mimo
-TARGET="wasm32-unknown-unknown"
-cargo +nightly check --target="$TARGET" --no-default-features --features "yew,backend-flex,backend-simd,$MAMBA"
+MAMBA="mamba2"
+cargo +nightly check --target wasm32-unknown-unknown --no-default-features \
+  --features "yew,backend-flex,backend-simd,$MAMBA"
 wasm-pack build --release --target web --out-dir "frontend/$MAMBA/pkg" --no-opt \
   --no-default-features --features "yew,backend-flex,backend-simd,$MAMBA"
-miniserve -i 127.0.0.1 "frontend/"
+miniserve -i 127.0.0.1 "frontend/"   # then open /mamba2/index.html
 ```
 
-For Mamba-1, Then open the page at [http://127.0.0.1:8080/mamba1/index.html](http://127.0.0.1:8080/mamba1/index.html).
-Nots:
-- This won't download anything by default, and you must click buttons to download, load and run the model - which is run in sequential mode.
-- Downloads are cached in IndexedDB as 10MB chunks, so they resume across reloads and can be erased from the page.
-- `wasm-opt` is disabled for `yew` with `wasm-pack build --no-opt`.
+Notes:
+- `--no-opt` is **required** for `yew` builds — `wasm-opt` breaks them. The console
+  build may keep it.
+- The Yew page downloads nothing until you click; generation runs sequentially,
+  one token per timer tick, so the browser keeps painting.
+- The deployed pages are one model per bundle (`frontend/mamba1`, `frontend/mamba2`, …);
+  a bundle built with several model features runs the highest-priority one, named
+  on its asset card.
+- `getrandom` needs `--cfg getrandom_backend="wasm_js"`, already set in
+  `.cargo/config.toml`.
 
-### Dev
+CI builds all four Yew bundles on every push to `main` and publishes them to
+`gh-pages` — see [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml).
 
-For a better IDE development, you may want to change the default features/settings on `Cargo.toml` and `.cargo/config.toml` depending on what backend and target you're testing.
+## Benchmarks
+
+[`./bench.sh`](bench.sh) times a whole language model per checkpoint in both run
+modes — `forward` (one chunkwise pass over the prompt) and `step` (one recurrent
+decode step) — across three backend builds: flex, CUDA, and CUDA with fusion and
+autotuning. It writes the comparison to [`bench.md`](bench.md).
+
+```bash
+./bench.sh                    # all three configurations
+./bench.sh step               # only cases matching the criterion filter
+BENCH_SEQ=1024 ./bench.sh     # input sizing knobs
+```
+
+The models are built with the checkpoints' **exact topology on random weights**, so
+benchmarking downloads nothing. The cases and the environment knobs live in
+[`benches/model.rs`](benches/model.rs); `cargo bench --bench model` runs a single
+configuration.
+
+Three separate builds are required rather than one: fusion is a compile-time type
+alias inside `burn_cuda::Cuda` (there is no fusion *device* variant), and autotune
+is likewise a compile-time cubecl feature.
+
+## Example outputs
+
+From `flex`/`ndarray` (native and wasm) and `cuda`, with sequential and parallel
+always matching:
+
+**Mamba-1**
+```
+Mamba is the most popular and best-selling game in the world. It has been downloaded more than 1,000 times by over 1 million people worldwide since its release on March 18th 2016...
+```
+
+**Mamba-2**
+```
+Mamba is the most popular and well-known of all Mambo songs. It was first recorded by a group called The Natives in 1883, but it has been covered many times since then with...
+```
+
+**Mamba-3 SISO**
+```
+Mamba is the name of a genus of venomous snakes found in Africa. It has been used as a medicine for centuries, and its bite can cause severe pain and swelling...
+```
+
+**Mamba-3 MIMO**
+```
+Mamba is the name of a tribe in the Mambilla region of Tanzania. They are known for their traditional hunting and fishing techniques, which they use to catch fish from...
+```
+
+## How it works
+
+- **Load path** — a hardcoded `MambaVocabNetConfig` mirroring the checkpoint's
+  `config.json` is `init`ed, then a `burn_store::SafetensorsStore` overwrites every
+  parameter. Key remapping rewrites the `backbone.…` names to Burn module paths;
+  adapters transpose PyTorch `Linear` weights and cast everything to f32. The LM
+  head is **tied** — the checkpoints set `missing_lm_head`, so it is built by
+  transposing the embedding after the store has been applied.
+- **Two run modes over one set of weights** — `run_sequential` carries a cache and
+  emits one token per call (this is what the browser uses); `run_parallel` runs
+  chunkwise over the whole token list with no cache, re-running the growing prefix
+  each iteration.
+- **Browser asset lifecycle** — the tokenizer and the checkpoint are independent
+  assets, each with its own IndexedDB cache state and in-memory load state, so the
+  UI can fetch, erase, load and unload them separately.
+
+Anything about SSM math, cache shapes or `Mamba*Config` fields lives in
+[`burn-mamba`](https://github.com/swfsql/burn-mamba) — this repository is the glue.
+
+## Development
+
+For a smoother IDE experience, `Cargo.toml` keeps commented `default = …` lines and
+`.cargo/config.toml` a commented `[build] target`; switch them to whatever target
+and backend you are working on. `Cargo.toml` also keeps commented `path = …` lines
+for `burn` and `burn-mamba` — use them when changing this repo and a sibling
+together, and switch back before committing. The `burn` revision **must match** the
+one `burn-mamba` pins, or cargo resolves two distinct `burn` crates and no types
+unify.
+
+## Credits
+
+Mamba-1 adapted from
+[huggingface/candle — mamba-minimal](https://github.com/huggingface/candle/blob/fd7c8565646039e35925b8730d27ddad195d7e73/candle-examples/examples/mamba-minimal/)
+and Mamba-2 from [mamba2-minimal](https://github.com/tommyip/mamba2-minimal); the
+block definitions come from [burn-mamba](https://github.com/swfsql/burn-mamba).
+Weights are the official
+[`state-spaces`](https://huggingface.co/state-spaces) checkpoints.
