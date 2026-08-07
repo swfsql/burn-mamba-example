@@ -1,19 +1,12 @@
-// use crate::safetensors_load;
-use crate::{LogitsProcessorWrapper, MambaWrapper, hf};
+use crate::hub::wasm::{Api, ApiRepo, ChunkList};
+use crate::hub::{
+    Endpoint, FilePath, FileUrl, HubError, Metadata, Repo, RepoId, RepoType, RevisionPath,
+    UrlTemplate,
+};
+use crate::tokenizer::Tokenizer;
+use crate::{Checkpoint, LogitsProcessorWrapper, MambaWrapper, hf, load_mamba};
 use burn::prelude::*;
 use burn_mamba::prelude::*;
-use hf_hub::{
-    Repo, RepoType,
-    api::wasm::{Api, ApiRepo, Metadata, UrlTemplate},
-    types::{Endpoint, FilePath, FileUrl, RepoId, RevisionPath, TmpFileBlobKeyList},
-};
-use tokenizers::Tokenizer;
-
-#[cfg(feature = "mamba1")]
-use crate::safetensors_load_mamba1;
-
-#[cfg(feature = "mamba2")]
-use crate::safetensors_load_mamba2;
 
 pub struct Model {
     // general data
@@ -166,36 +159,17 @@ impl MambaWrapperBuilder {
     pub fn with(&mut self, selection: &ModelSelection, data: Vec<u8>, device: &Device) {
         match selection {
             ModelSelection::Tokenizer => {
-                let tokenizer = tokenizers::Tokenizer::from_bytes(data)
-                    .map_err(anyhow::Error::msg)
-                    .unwrap();
+                let tokenizer = Tokenizer::from_bytes(&data).unwrap();
                 self.tokenizer = Some(tokenizer);
             }
-            #[cfg(feature = "mamba1")]
             ModelSelection::Mamba => {
                 let mamba = {
                     let timing = web_time::Instant::now();
                     log::info!("initializing and loading mamba model");
 
                     let mamba_config = self.mamba_config.clone().expect("missing mamba config");
-                    let mamba = safetensors_load_mamba1(&data, mamba_config, &device).unwrap();
-                    log::info!(
-                        "mamba initialized and loaded in {}ms",
-                        timing.elapsed().as_millis()
-                    );
-
-                    mamba
-                };
-                self.mamba = Some(mamba);
-            }
-            #[cfg(feature = "mamba2")]
-            ModelSelection::Mamba => {
-                let mamba = {
-                    let timing = web_time::Instant::now();
-                    log::info!("initializing and loading mamba model");
-
-                    let mamba_config = self.mamba_config.clone().expect("missing mamba config");
-                    let mamba = safetensors_load_mamba2(&data, mamba_config, &device).unwrap();
+                    let mamba =
+                        load_mamba(Checkpoint::Bytes(data), mamba_config, device).unwrap();
                     log::info!(
                         "mamba initialized and loaded in {}ms",
                         timing.elapsed().as_millis()
@@ -331,7 +305,7 @@ impl ModelDataConfig {
         }
     }
 
-    pub async fn metadata(&self, api: &Api) -> Option<Metadata> {
+    pub async fn metadata(&self, api: &Api) -> Result<Metadata, HubError> {
         match &self {
             ModelDataConfig::Custom(_) => {
                 todo!()
@@ -339,7 +313,7 @@ impl ModelDataConfig {
             ModelDataConfig::Huggingface(hf) => hf.metadata(api).await,
         }
     }
-    pub async fn check(&self, api: &Api, metadata: &Metadata) -> Option<TmpFileBlobKeyList> {
+    pub async fn check(&self, api: &Api, metadata: &Metadata) -> Result<ChunkList, HubError> {
         match &self {
             ModelDataConfig::Custom(_) => {
                 todo!()
@@ -371,17 +345,13 @@ impl HuggingfaceConfig {
             .url(&self.endpoint, &repo, &self.revision, &self.filepath)
     }
 
-    pub async fn metadata(&self, api: &Api) -> Option<Metadata> {
+    pub async fn metadata(&self, api: &Api) -> Result<Metadata, HubError> {
         let api_repo = self.api_repo(api);
         let file_url = api_repo.url(&self.filepath);
-        let metadata = api.metadata(&file_url).await.unwrap();
-        Some(metadata)
+        api.metadata(&file_url).await
     }
-    pub async fn check(&self, api: &Api, metadata: &Metadata) -> Option<TmpFileBlobKeyList> {
-        let repo = Repo::new(self.repo_id.clone(), self.repo_type);
-        let api_repo = api.repo(repo);
-        let check = api_repo.check(&self.filepath, metadata).await.unwrap();
-        Some(check)
+    pub async fn check(&self, api: &Api, metadata: &Metadata) -> Result<ChunkList, HubError> {
+        self.api_repo(api).check(metadata).await
     }
 }
 
@@ -430,6 +400,6 @@ impl Default for Cache {
 pub struct CacheFetch {
     pub current_chunk: usize,
     pub metadata: Option<Metadata>,
-    pub chunk_list: TmpFileBlobKeyList, // pub total_chunk: usize,
-                                        // pub total_bytes: usize,
+    pub chunk_list: ChunkList, // pub total_chunk: usize,
+                               // pub total_bytes: usize,
 }

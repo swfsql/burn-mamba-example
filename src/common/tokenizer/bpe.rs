@@ -1,0 +1,110 @@
+//! Byte-pair encoding over the byte-level alphabet.
+//!
+//! Matches `tokenizers`' `models::bpe::BPE` for the configuration used by
+//! `EleutherAI/gpt-neox-20b`: no dropout, no unknown token, no continuing-subword
+//! prefix, no end-of-word suffix.
+
+use std::collections::HashMap;
+
+/// Rank (merge priority) and resulting id of a merge rule.
+#[derive(Clone, Copy, Debug)]
+struct Merge {
+    rank: u32,
+    new_id: u32,
+}
+
+/// The merge table, keyed by the pair of ids being joined.
+#[derive(Debug, Default)]
+pub struct Bpe {
+    merges: HashMap<(u32, u32), Merge>,
+}
+
+impl Bpe {
+    /// From the `model.merges` entries of a `tokenizer.json`, each `"<left> <right>"`,
+    /// resolved against `vocab`. Entries naming an unknown piece are skipped, the way
+    /// `tokenizers` does when a merge cannot be resolved.
+    pub fn new<'a>(
+        merges: impl IntoIterator<Item = (&'a str, &'a str)>,
+        vocab: &HashMap<String, u32>,
+    ) -> Self {
+        let mut table = HashMap::new();
+        for (rank, (left, right)) in merges.into_iter().enumerate() {
+            let (Some(a), Some(b)) = (vocab.get(left), vocab.get(right)) else {
+                continue;
+            };
+            let joined = format!("{left}{right}");
+            let Some(new_id) = vocab.get(&joined) else {
+                continue;
+            };
+            table.entry((*a, *b)).or_insert(Merge {
+                rank: rank as u32,
+                new_id: *new_id,
+            });
+        }
+        Self { merges: table }
+    }
+
+    /// Tokenizes one pre-tokenized word (already in the byte-level alphabet).
+    ///
+    /// Repeatedly applies the lowest-ranked applicable merge, breaking ties towards
+    /// the left-most pair — the same order `tokenizers`' merge heap produces.
+    /// Characters absent from `vocab` are dropped (there is no unknown token).
+    pub fn tokenize(&self, word: &str, vocab: &HashMap<String, u32>) -> Vec<u32> {
+        let mut symbols: Vec<u32> = Vec::with_capacity(word.len());
+        let mut buf = [0u8; 4];
+        for c in word.chars() {
+            match vocab.get(c.encode_utf8(&mut buf) as &str) {
+                Some(id) => symbols.push(*id),
+                None => log::warn!("byte-level char {c:?} is missing from the vocabulary"),
+            }
+        }
+
+        while symbols.len() > 1 {
+            let mut best: Option<(usize, Merge)> = None;
+            for i in 0..symbols.len() - 1 {
+                let Some(merge) = self.merges.get(&(symbols[i], symbols[i + 1])) else {
+                    continue;
+                };
+                if best.is_none_or(|(_, b)| merge.rank < b.rank) {
+                    best = Some((i, *merge));
+                }
+            }
+            let Some((i, merge)) = best else { break };
+            symbols[i] = merge.new_id;
+            symbols.remove(i + 1);
+        }
+
+        symbols
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn toy() -> (HashMap<String, u32>, Bpe) {
+        let vocab: HashMap<String, u32> = ["a", "b", "c", "ab", "bc", "abc"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, s)| (s.to_string(), i as u32))
+            .collect();
+        // "b c" outranks "a b", so "abc" must merge right-to-left first.
+        let bpe = Bpe::new([("b", "c"), ("a", "b"), ("a", "bc")], &vocab);
+        (vocab, bpe)
+    }
+
+    #[test]
+    fn merges_by_rank_not_position() {
+        let (vocab, bpe) = toy();
+        assert_eq!(bpe.tokenize("abc", &vocab), vec![vocab["abc"]]);
+        assert_eq!(bpe.tokenize("ab", &vocab), vec![vocab["ab"]]);
+        assert_eq!(bpe.tokenize("a", &vocab), vec![vocab["a"]]);
+        assert_eq!(bpe.tokenize("", &vocab), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn unknown_chars_are_dropped() {
+        let (vocab, bpe) = toy();
+        assert_eq!(bpe.tokenize("azb", &vocab), vec![vocab["ab"]]);
+    }
+}

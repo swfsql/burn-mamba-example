@@ -1,13 +1,10 @@
 #[allow(unused_imports)]
 use crate::Precision;
-use crate::{LogitsProcessorWrapper, MambaWrapper, hf};
+use crate::hub::sync::Api;
+use crate::hub::{FilePath, Repo, RepoId, RepoType, RevisionPath};
+use crate::tokenizer::Tokenizer;
+use crate::{Checkpoint, LogitsProcessorWrapper, MambaWrapper, hf, load_mamba};
 use burn::prelude::*;
-use hf_hub::types::FilePath;
-use hf_hub::{
-    Repo, RepoType,
-    api::sync::Api,
-    types::{RepoId, RevisionPath},
-};
 use log::info;
 
 pub fn main() -> anyhow::Result<()> {
@@ -53,8 +50,31 @@ pub fn main() -> anyhow::Result<()> {
 
 #[cfg(feature = "mamba1")]
 fn models_mamba1() -> anyhow::Result<MambaWrapper> {
-    use crate::safetensors_load_mamba1;
+    models(
+        hf::mamba1_130m::REPO_ID,
+        hf::mamba1_130m::REVISION_PATH,
+        hf::mamba1_130m::FILE_PATH_MODEL_SAFETENSORS,
+        hf::mamba1_130m::config(),
+    )
+}
 
+#[cfg(feature = "mamba2")]
+fn models_mamba2() -> anyhow::Result<MambaWrapper> {
+    models(
+        hf::mamba2_130m::REPO_ID,
+        hf::mamba2_130m::REVISION_PATH,
+        hf::mamba2_130m::FILE_PATH_MODEL_SAFETENSORS,
+        hf::mamba2_130m::config(),
+    )
+}
+
+/// Downloads (or reuses) the tokenizer and the checkpoint, then builds the model.
+fn models(
+    repo_id: &str,
+    revision_path: &str,
+    model_file: &str,
+    mamba_config: burn_mamba::prelude::MambaVocabNetConfig,
+) -> anyhow::Result<MambaWrapper> {
     let start = std::time::Instant::now();
 
     let api = Api::new()?;
@@ -67,21 +87,15 @@ fn models_mamba1() -> anyhow::Result<MambaWrapper> {
     );
 
     let repo = api.repo(Repo::with_revision(
-        RepoId(hf::mamba1_130m::REPO_ID.into()),
+        RepoId(repo_id.into()),
         RepoType::Model,
-        RevisionPath(hf::mamba1_130m::REVISION_PATH.into()),
+        RevisionPath(revision_path.into()),
     ));
-    let mamba_filename = repo.get(&FilePath(
-        hf::mamba1_130m::FILE_PATH_MODEL_SAFETENSORS.into(),
-    ))?;
-    info!(
-        "mamba {} path: {mamba_filename:?}",
-        hf::mamba1_130m::FILE_PATH_MODEL_SAFETENSORS
-    );
+    let mamba_filename = repo.get(&FilePath(model_file.into()))?;
+    info!("mamba {model_file} path: {mamba_filename:?}");
     info!("retrieved the files in {:?}", start.elapsed());
 
-    let tokenizer =
-        tokenizers::Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
+    let tokenizer = Tokenizer::from_file(tokenizer_filename)?;
 
     let mut device: Device = Default::default();
     {
@@ -92,86 +106,12 @@ fn models_mamba1() -> anyhow::Result<MambaWrapper> {
 
     let start = std::time::Instant::now();
     info!("started loading the model");
-    let mamba_safetensors_bytes = {
-        let f = std::fs::File::open(mamba_filename)?;
-        unsafe { memmap2::MmapOptions::new().map(&f)? }
-    };
-
-    let mamba_config = hf::mamba1_130m::config();
-    
-    let mamba =
-        safetensors_load_mamba1(&mamba_safetensors_bytes, mamba_config.clone(), &device)?;
+    let mamba = load_mamba(
+        Checkpoint::File(mamba_filename),
+        mamba_config.clone(),
+        &device,
+    )?;
     info!("loaded the model in {:?}", start.elapsed());
 
-    let models = MambaWrapper::new(
-        tokenizer,
-        mamba,
-        mamba_config,
-    );
-
-    return Ok(models);
-}
-
-#[cfg(feature = "mamba2")]
-fn models_mamba2() -> anyhow::Result<MambaWrapper>
-{
-    use crate::safetensors_load_mamba2;
-
-    let start = std::time::Instant::now();
-
-    let mut device: Device = Default::default();
-    {
-        device
-            .configure((crate::PRECISION_FLOAT_D_TYPE, crate::PRECISION_INT_D_TYPE))
-            .expect("Failed to install fp32/i32 device defaults");
-    }
-
-    let api = Api::new()?;
-    let tokenizer_filename = api
-        .model(RepoId(hf::tokenizer::REPO_ID.into()))
-        .get(&FilePath(hf::tokenizer::FILE_PATH_TOKENIZER_JSON.into()))?;
-    info!(
-        "tokenizer {} path: {tokenizer_filename:?}",
-        hf::tokenizer::FILE_PATH_TOKENIZER_JSON
-    );
-    let tokenizer =
-        tokenizers::Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
-    // let mut processor = LogitsProcessorWrapper::new(0, Some(1.0), Some(1.0), 1.0, 1024);
-
-    let models = {
-        let repo = api.repo(Repo::with_revision(
-            RepoId(hf::mamba2_130m::REPO_ID.into()),
-            RepoType::Model,
-            RevisionPath(hf::mamba2_130m::REVISION_PATH.into()),
-        ));
-        let mamba_filename = repo.get(&FilePath(
-            hf::mamba2_130m::FILE_PATH_MODEL_SAFETENSORS.into(),
-        ))?;
-        info!(
-            "mamba {} path: {mamba_filename:?}",
-            hf::mamba2_130m::FILE_PATH_MODEL_SAFETENSORS
-        );
-        info!("retrieved the files in {:?}", start.elapsed());
-
-        let start = std::time::Instant::now();
-        info!("started loading the model");
-        let mamba_safetensors_bytes = {
-            let f = std::fs::File::open(mamba_filename)?;
-            unsafe { memmap2::MmapOptions::new().map(&f)? }
-        };
-        let mamba_config = hf::mamba2_130m::config();
-        let mamba =
-            safetensors_load_mamba2(&mamba_safetensors_bytes, mamba_config.clone(), &device)?;
-        info!("loaded the model in {:?}", start.elapsed());
-
-        let models = MambaWrapper::new(
-            tokenizer,
-            mamba,
-            mamba_config,
-        );
-
-        models
-    };
-
-    return Ok(models);
+    Ok(MambaWrapper::new(tokenizer, mamba, mamba_config))
 }

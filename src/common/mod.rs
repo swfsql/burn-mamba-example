@@ -1,34 +1,34 @@
-mod safetensors_load;
+pub mod hub;
+pub mod sampling;
+#[cfg(any(feature = "mamba1", feature = "mamba2"))]
+mod store_load;
 pub mod token_output_stream;
+pub mod tokenizer;
 
-#[cfg(feature = "mamba1")]
-pub use safetensors_load::safetensors_load_mamba1;
-
-#[cfg(feature = "mamba2")]
-pub use safetensors_load::safetensors_load_mamba2;
+#[cfg(any(feature = "mamba1", feature = "mamba2"))]
+pub use store_load::{Checkpoint, load_mamba};
 
 #[allow(unused_imports)]
 use burn::prelude::*;
 #[allow(unused_imports)]
 use token_output_stream::*;
 #[allow(unused_imports)]
-use tokenizers::Tokenizer;
+use tokenizer::Tokenizer;
 
-use candle_transformers::generation::LogitsProcessor;
-pub use safetensors_load::load_param_f32_to_f32;
+#[allow(unused_imports)]
 use burn_mamba::prelude::*;
+use sampling::LogitsProcessor;
 
 #[allow(unused_imports)]
 pub type Precision = f32;
 use burn::tensor::{FloatDType, IntDType};
 pub const PRECISION_FLOAT_D_TYPE: FloatDType = FloatDType::F32;
 pub const PRECISION_INT_D_TYPE: IntDType = IntDType::I32;
-pub const CANDLE_PRECISION_FLOAT_D_TYPE: candle_core::DType = candle_core::DType::F32;
 
 pub mod hf {
     pub mod tokenizer {
         #[allow(unused_imports)]
-        use hf_hub::types::{FilePath, RepoId};
+        use crate::hub::{FilePath, RepoId};
 
         /// A [RepoId].
         pub const REPO_ID: &str = "EleutherAI/gpt-neox-20b";
@@ -39,7 +39,7 @@ pub mod hf {
     #[cfg(feature = "mamba1")]
     pub mod mamba1_130m {
         #[allow(unused_imports)]
-        use hf_hub::types::{FilePath, RepoId, RevisionPath};
+        use crate::hub::{FilePath, RepoId, RevisionPath};
         use burn_mamba::mamba1;
         use burn_mamba::prelude::*;
 
@@ -84,7 +84,7 @@ pub mod hf {
     #[cfg(feature = "mamba2")]
     pub mod mamba2_130m {
         #[allow(unused_imports)]
-        use hf_hub::types::{FilePath, RepoId, RevisionPath};
+        use crate::hub::{FilePath, RepoId, RevisionPath};
         use burn_mamba::mamba2;
         use burn_mamba::prelude::*;
 
@@ -158,13 +158,7 @@ impl MambaWrapper
     /// and also the eos token.
     pub fn reset_prompt(&mut self, prompt: &str) -> anyhow::Result<(Vec<usize>, usize)> {
         self.tokenizer.clear();
-        let tokens = self
-            .tokenizer
-            .tokenizer()
-            .encode(prompt, true)
-            .map_err(anyhow::Error::msg)?
-            .get_ids()
-            .to_vec();
+        let tokens = self.tokenizer.tokenizer().encode(prompt);
         let eos_token = match self.tokenizer.get_token("<|endoftext|>") {
             Some(token) => token,
             None => anyhow::bail!("cannot find the </s> token"),
@@ -198,7 +192,7 @@ impl MambaWrapper
 
         // prints the first token (if present), as this is used as *input* to the model
         if let Some(t) = tokens.first() {
-            if let Some(t) = self.tokenizer.next_token(*t as u32)? {
+            if let Some(t) = self.tokenizer.next_token(*t as u32) {
                 print!("{t}")
             }
         }
@@ -216,44 +210,25 @@ impl MambaWrapper
                 instant = Some(std::time::Instant::now());
             }
 
-            let full_shape = logits_list.dims();
-            let shape = (full_shape[2],);
-
             let logits_list = logits_list.into_data().to_vec::<Precision>().unwrap();
-
-            let padded_vocab_size = {
-                #[cfg(feature = "mamba1")]
-                use hf::mamba1_130m as m;
-
-                #[cfg(feature = "mamba2")]
-                use hf::mamba2_130m as m;
-
-                if m::VOCAB_SIZE % m::PAD_VOCAB_SIZE_MULTIPLE == 0 {
-                    m::VOCAB_SIZE
-                } else {
-                    ((m::VOCAB_SIZE / m::PAD_VOCAB_SIZE_MULTIPLE) + 1) * m::PAD_VOCAB_SIZE_MULTIPLE
-                }
-            };
 
             // logits contains an output for each timestep
             let logits_list = logits_list
-                .chunks_exact(padded_vocab_size)
+                .chunks_exact(self.padded_vocab_size())
                 .skip(i)
-                .map(|chunk: &[_]| {
-                    candle_core::Tensor::from_slice(chunk, shape, &candle_core::Device::Cpu)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+                .map(<[Precision]>::to_vec)
+                .collect::<Vec<_>>();
 
             //
 
             for logits in logits_list.into_iter() {
                 let next_token = logits_processor_config.add_logits(i, &mut tokens, logits)?;
-                if next_token as usize == eos_token {
+                if next_token == eos_token {
                     break 'outer;
                 }
 
                 // if the token has some valid representation, print it
-                if let Some(t) = self.tokenizer.next_token(next_token as u32)? {
+                if let Some(t) = self.tokenizer.next_token(next_token as u32) {
                     #[allow(unused_imports)]
                     use std::io::Write;
                     print!("{t}");
@@ -262,7 +237,7 @@ impl MambaWrapper
                 i += 1;
             }
         }
-        if let Some(rest) = self.tokenizer.decode_rest().map_err(anyhow::Error::msg)? {
+        if let Some(rest) = self.tokenizer.decode_rest() {
             print!("{rest}");
         }
         Ok((i, instant))
@@ -281,7 +256,7 @@ impl MambaWrapper
 
         // prints the first token (if present), as this is used as *input* to the model
         if let Some(t) = tokens.first() {
-            if let Some(t) = self.tokenizer.next_token(*t as u32)? {
+            if let Some(t) = self.tokenizer.next_token(*t as u32) {
                 print!("{t}")
             }
         }
@@ -303,7 +278,7 @@ impl MambaWrapper
             }
 
             // if the token has some valid representation, print it
-            if let Some(t) = self.tokenizer.next_token(next_token as u32)? {
+            if let Some(t) = self.tokenizer.next_token(next_token as u32) {
                 #[allow(unused_imports)]
                 use std::io::Write;
                 print!("{t}");
@@ -312,7 +287,7 @@ impl MambaWrapper
 
             i += 1;
         }
-        if let Some(rest) = self.tokenizer.decode_rest().map_err(anyhow::Error::msg)? {
+        if let Some(rest) = self.tokenizer.decode_rest() {
             print!("{rest}");
         }
         Ok((i, instant))
@@ -325,14 +300,12 @@ impl MambaWrapper
         &self,
         input: usize,
         caches: Option<MambaCaches>,
-    ) -> anyhow::Result<(candle_core::Tensor, MambaCaches)> {
+    ) -> anyhow::Result<(Vec<Precision>, MambaCaches)> {
         let device = device(&self.mamba);
         let input = Tensor::from_data([input], &device);
 
         let (logits, new_caches) = self.mamba.step(input, caches, None, None);
         assert_eq!([1, self.padded_vocab_size()], logits.dims());
-
-        let shape = (self.padded_vocab_size(),);
 
         let logits = logits
             .cast(PRECISION_FLOAT_D_TYPE)
@@ -340,8 +313,6 @@ impl MambaWrapper
             .to_vec::<Precision>()
             .unwrap();
 
-        let logits = candle_core::Tensor::from_vec(logits, shape, &candle_core::Device::Cpu)?
-            .to_dtype(CANDLE_PRECISION_FLOAT_D_TYPE)?;
         Ok((logits, new_caches))
     }
 
@@ -373,22 +344,16 @@ impl LogitsProcessorWrapper {
         &mut self,
         i: usize,
         tokens: &mut Vec<usize>,
-        logits: candle_core::Tensor,
+        mut logits: Vec<Precision>,
     ) -> anyhow::Result<usize> {
-        let logits = if self.repeat_penalty == 1. {
-            logits
-        } else {
+        if self.repeat_penalty != 1. {
             let start_at = i.saturating_sub(self.repeat_last_n);
-            candle_transformers::utils::apply_repeat_penalty(
-                &logits,
-                self.repeat_penalty,
-                tokens[start_at..i + 1]
-                    .iter()
-                    .map(|e| *e as u32)
-                    .collect::<Vec<u32>>()
-                    .as_slice(),
-            )?
-        };
+            let context = tokens[start_at..i + 1]
+                .iter()
+                .map(|e| *e as u32)
+                .collect::<Vec<u32>>();
+            sampling::apply_repeat_penalty(&mut logits, self.repeat_penalty, &context);
+        }
 
         let next_token;
         if i + 1 < tokens.len() {
@@ -402,7 +367,7 @@ impl LogitsProcessorWrapper {
             // try to predict the next token
             next_token = self.logits_processor.sample(&logits)? as usize;
             // add the token to the "tokens" list
-            tokens.push(next_token as usize);
+            tokens.push(next_token);
             // *generated_tokens += 1;
         }
         Ok(next_token)
@@ -422,7 +387,7 @@ pub fn device(model: &MambaVocabNet) -> Device {
 #[cfg(any(feature = "mamba1", feature = "mamba2"))]
 #[allow(irrefutable_let_patterns)]
 pub fn padded_vocab_size(config: &MambaVocabNetConfig) -> usize {
-    let (vocab_size, pad_vocab_size_multiple) = 
+    let (vocab_size, pad_vocab_size_multiple) =
     match config {
         #[cfg(feature = "mamba1")]
         MambaVocabNetConfig::Mamba1{vocab_size, pad_vocab_size_multiple, ..} => {
@@ -433,7 +398,7 @@ pub fn padded_vocab_size(config: &MambaVocabNetConfig) -> usize {
             (vocab_size, pad_vocab_size_multiple)
         }
     };
-    
+
     if vocab_size % pad_vocab_size_multiple == 0 {
         *vocab_size
     } else {
@@ -452,7 +417,7 @@ pub fn empty_caches(batch: usize, mamba_config: &MambaVocabNetConfig, device: &D
         }
         #[cfg(feature = "mamba2")]
         MambaVocabNetConfig::Mamba2 {n_real_layers, mamba_block, ..} => {
-            let caches = 
+            let caches =
             Mamba2CachesConfig::new_from_block_config(*n_real_layers, batch, mamba_block.clone())
                 .init(device);
             MambaCaches::Mamba2(caches)

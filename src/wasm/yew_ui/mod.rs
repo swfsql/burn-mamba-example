@@ -3,11 +3,8 @@ pub mod update;
 pub mod view;
 
 use self::model::ModelSelection;
-use hf_hub::{
-    api::wasm::{Api, ApiError, Metadata},
-    types::TmpFileBlobKeyList,
-};
-use indexed_db_futures::web_sys::DomException;
+use crate::hub::wasm::{Api, ChunkList};
+use crate::hub::{HubError, Metadata};
 pub use model::{Connection, Model};
 use yew::prelude::*;
 
@@ -15,27 +12,27 @@ pub enum Msg {
     // Todo,
 
     // fetching, loading, building
-    /// Starts the huggingface api connection (reqwest and indexeddb clients).
+    /// Starts the huggingface api connection (fetch + IndexedDB cache).
     StartConnectApi,
-    /// Concludes the huggingface api connection (reqwest and indexeddb clients).
+    /// Concludes the huggingface api connection (fetch + IndexedDB cache).
     FinishConnectApi(Api),
-    FailConnectApi(ApiError),
-    /// Starts the huggingface api disconnection (reqwest and indexeddb clients).
+    FailConnectApi(HubError),
+    /// Starts the huggingface api disconnection (fetch + IndexedDB cache).
     StartDisconnectApi,
-    /// Concludes the huggingface api disconnection (reqwest and indexeddb clients).
+    /// Concludes the huggingface api disconnection (fetch + IndexedDB cache).
     FinishDisconnectApi,
     FailDisconnectApi,
     /// Starts checking information about the data of a model (size, etc).
     StartModelDataCheck(ModelSelection),
     /// Concludes checking information about the data of a model (size, etc).
-    FinishModelDataCheck(ModelSelection, Metadata, TmpFileBlobKeyList),
+    FinishModelDataCheck(ModelSelection, Metadata, ChunkList),
     FailModelDataCheck,
     /// Starts fetching a model data.
     StartModelDataFetch(ModelSelection),
     /// Concludes fetching a single chunk of a model data.
     /// This is useful to state about the fetching progress.
     FinishModelDataFetchSingle(ModelSelection, usize),
-    FailModelDataFetchSingle(ModelSelection, usize, ApiError),
+    FailModelDataFetchSingle(ModelSelection, usize, HubError),
     /// Concludes fetching a model data (all chunks).
     FinishModelDataFetch(ModelSelection),
     /// Starts uploading a model data.
@@ -49,7 +46,7 @@ pub enum Msg {
     StartModelDataLoad(ModelSelection),
     /// Concludes loading (reading) a model data.
     FinishModelDataLoad(ModelSelection, Vec<u8>),
-    FailModelDataLoad(ModelSelection, DomException),
+    FailModelDataLoad(ModelSelection, HubError),
     /// Unloads a model data.
     /// The goal is to clear memory usage.
     /// If the model was built, it also get's unbuilt.
@@ -60,7 +57,7 @@ pub enum Msg {
     StartModelDataErase(ModelSelection),
     /// Concludes erasing a model data from the cache.
     FinishModelDataErase(ModelSelection),
-    FailModelDataErase(ModelSelection, DomException),
+    FailModelDataErase(ModelSelection, HubError),
     /// Starts building a model from the model data.
     /// This is when the data stops being raw bytes and become tensors (etc) instead.
     StartModelBuild(ModelSelection),

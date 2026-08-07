@@ -1,18 +1,19 @@
-//! This is a copy-and-paste from [candle-examples](https://github.com/huggingface/candle/blob/main/candle-examples/src/token_output_stream.rs).
+//! Adapted from [candle-examples](https://github.com/huggingface/candle/blob/main/candle-examples/src/token_output_stream.rs),
+//! rewired onto [crate::tokenizer::Tokenizer].
 
-use candle_core::Result;
+use crate::tokenizer::Tokenizer;
 
 /// This is a wrapper around a tokenizer to ensure that tokens can be returned to the user in a
 /// streaming way rather than having to wait for the full decoding.
 pub struct TokenOutputStream {
-    tokenizer: tokenizers::Tokenizer,
+    tokenizer: Tokenizer,
     tokens: Vec<u32>,
     prev_index: usize,
     current_index: usize,
 }
 
 impl TokenOutputStream {
-    pub fn new(tokenizer: tokenizers::Tokenizer) -> Self {
+    pub fn new(tokenizer: Tokenizer) -> Self {
         Self {
             tokenizer,
             tokens: Vec::new(),
@@ -21,62 +22,59 @@ impl TokenOutputStream {
         }
     }
 
-    pub fn into_inner(self) -> tokenizers::Tokenizer {
+    pub fn into_inner(self) -> Tokenizer {
         self.tokenizer
     }
 
-    fn decode(&self, tokens: &[u32]) -> Result<String> {
-        match self.tokenizer.decode(tokens, true) {
-            Ok(str) => Ok(str),
-            Err(err) => candle_core::bail!("cannot decode: {err}"),
-        }
+    fn decode(&self, tokens: &[u32]) -> String {
+        self.tokenizer.decode(tokens, true)
     }
 
     // https://github.com/huggingface/text-generation-inference/blob/5ba53d44a18983a4de32d122f4cb46f4a17d9ef6/server/text_generation_server/models/model.py#L68
-    pub fn next_token(&mut self, token: u32) -> Result<Option<String>> {
+    pub fn next_token(&mut self, token: u32) -> Option<String> {
         let prev_text = if self.tokens.is_empty() {
             String::new()
         } else {
             let tokens = &self.tokens[self.prev_index..self.current_index];
-            self.decode(tokens)?
+            self.decode(tokens)
         };
         self.tokens.push(token);
-        let text = self.decode(&self.tokens[self.prev_index..])?;
+        let text = self.decode(&self.tokens[self.prev_index..]);
         if text.len() > prev_text.len() && text.chars().last().unwrap().is_alphabetic() {
             let text = text.split_at(prev_text.len());
             self.prev_index = self.current_index;
             self.current_index = self.tokens.len();
-            Ok(Some(text.1.to_string()))
+            Some(text.1.to_string())
         } else {
-            Ok(None)
+            None
         }
     }
 
-    pub fn decode_rest(&self) -> Result<Option<String>> {
+    pub fn decode_rest(&self) -> Option<String> {
         let prev_text = if self.tokens.is_empty() {
             String::new()
         } else {
             let tokens = &self.tokens[self.prev_index..self.current_index];
-            self.decode(tokens)?
+            self.decode(tokens)
         };
-        let text = self.decode(&self.tokens[self.prev_index..])?;
+        let text = self.decode(&self.tokens[self.prev_index..]);
         if text.len() > prev_text.len() {
             let text = text.split_at(prev_text.len());
-            Ok(Some(text.1.to_string()))
+            Some(text.1.to_string())
         } else {
-            Ok(None)
+            None
         }
     }
 
-    pub fn decode_all(&self) -> Result<String> {
+    pub fn decode_all(&self) -> String {
         self.decode(&self.tokens)
     }
 
     pub fn get_token(&self, token_s: &str) -> Option<u32> {
-        self.tokenizer.get_vocab(true).get(token_s).copied()
+        self.tokenizer.token_to_id(token_s)
     }
 
-    pub fn tokenizer(&self) -> &tokenizers::Tokenizer {
+    pub fn tokenizer(&self) -> &Tokenizer {
         &self.tokenizer
     }
 

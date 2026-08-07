@@ -1,7 +1,7 @@
 use super::Msg;
 use super::model::ModelSelection;
 pub use super::model::{self, Connection, Model};
-use hf_hub::{api::wasm::Api, types::TmpFileBlobKey};
+use crate::hub::wasm::{Api, ChunkKey};
 use yew::prelude::*;
 
 const TICK_MILLIS: u32 = 1;
@@ -92,7 +92,7 @@ impl model::Model {
                 ctx.link().send_future(async move {
                     for (i, chunk_file) in chunk_files.into_iter().enumerate() {
                         if let Err(chunk_file) = chunk_file {
-                            match api_repo.download_tempfile(&url, &chunk_file).await {
+                            match api_repo.download_chunk(&url, &chunk_file).await {
                                 Ok(()) => {}
                                 Err(err) => {
                                     return Msg::FailModelDataFetchSingle(selection, i, err);
@@ -143,7 +143,7 @@ impl model::Model {
                 let api = self.cache_api.as_connected().unwrap().clone();
                 let model_data = self.select_mut(&selection);
                 model_data.load.is_busy = true;
-                let chunks_keys: Vec<TmpFileBlobKey> = model_data
+                let chunks_keys: Vec<ChunkKey> = model_data
                     .cache
                     .fetching
                     .chunk_list
@@ -317,12 +317,7 @@ impl model::Model {
 
                 // gets first token (as if it were an implicit output)
                 if let Some(t) = self.tokens.first() {
-                    if let Some(t) = models_wrapper
-                        .models
-                        .tokenizer
-                        .next_token(*t as u32)
-                        .unwrap()
-                    {
+                    if let Some(t) = models_wrapper.models.tokenizer.next_token(*t as u32) {
                         self.output += &t;
                     }
                 }
@@ -355,7 +350,7 @@ impl model::Model {
                     .unwrap();
 
                 // if the token has some valid representation, print it
-                if let Some(t) = models.tokenizer.next_token(next_token as u32).unwrap() {
+                if let Some(t) = models.tokenizer.next_token(next_token as u32) {
                     self.output += &t;
                 }
                 self.step += 1;
@@ -363,12 +358,7 @@ impl model::Model {
                 if next_token == self.eos_token {
                     self.is_generating = false;
 
-                    if let Some(rest) = models
-                        .tokenizer
-                        .decode_rest()
-                        .map_err(anyhow::Error::msg)
-                        .unwrap()
-                    {
+                    if let Some(rest) = models.tokenizer.decode_rest() {
                         self.output += &rest;
                     }
 

@@ -12,8 +12,9 @@ The model blocks come from the sibling crate [`burn-mamba`](../burn-mamba/CLAUDE
 **glue**: HF weight download, safetensors → Burn param loading, tokenizer/sampling, and
 the native/console/Yew front-ends.
 
-There are **no tests** in this repo — correctness is checked by running it and comparing
-sequential vs parallel output (see §Verifying a backend).
+Apart from a handful of unit tests inside `common/tokenizer/`, there are **no tests** —
+correctness is checked by running it and comparing sequential vs parallel output
+(see §Verifying a backend).
 
 ## Features Are The Configuration
 
@@ -68,10 +69,25 @@ src/
 │  │                      (repo ids + hardcoded MambaVocabNetConfig); MambaWrapper
 │  │                      (run_sequential / run_parallel / step); LogitsProcessorWrapper;
 │  │                      device / padded_vocab_size / empty_caches / ssd_path helpers
-│  ├─ safetensors_load.rs safetensors_load_mamba{1,2} + load_param_f{16,32}_to_f32
-│  └─ token_output_stream.rs  streaming detokenizer (verbatim from candle-examples)
+│  ├─ store_load.rs       `load_mamba(Checkpoint::{File,Bytes}, config, device)` — the
+│  │                      `burn-store` import (key remapping + adapters) + `tie_lm_head`
+│  ├─ sampling.rs         `LogitsProcessor` (argmax / temperature / top-k / top-p) and
+│  │                      `apply_repeat_penalty`, both over a plain `[f32]`
+│  ├─ tokenizer/          `tokenizer.json` reader (replaces the `tokenizers` crate)
+│  │  ├─ mod.rs           `Tokenizer`: serde parse + strict pipeline check, added-token
+│  │  │                   split, NFC, `encode` / `decode` / `{token,id}_to_{id,token}`
+│  │  ├─ byte_level.rs    the GPT-2 byte↔char alphabet + `split_words` (the pre-tokenizer
+│  │  │                   regex hand-rolled, no regex engine)
+│  │  └─ bpe.rs           the merge table and `tokenize` (lowest rank, then left-most)
+│  ├─ hub/                minimal HF client (replaces the `hf-hub` fork)
+│  │  ├─ mod.rs           `Repo`/`RepoId`/`FilePath`/`UrlTemplate`/`Metadata`/`HubError`
+│  │  ├─ sync.rs          native: `ureq` + the `~/.cache/huggingface/hub` refs/blobs/
+│  │  │                   snapshots layout, so other tools' caches are reused
+│  │  └─ wasm.rs          browser: `fetch` range requests cached as 10MB `ChunkKey`s in
+│  │                      IndexedDB (`hf-hub`'s db/store/key names are kept)
+│  └─ token_output_stream.rs  streaming detokenizer (adapted from candle-examples)
 ├─ native/
-│  ├─ mod.rs              `main()`: HF download (hf-hub sync) → mmap → load → sequential
+│  ├─ mod.rs              `main()`: HF download (hub::sync) → load → sequential
 │  │                      run, then parallel run, both timed
 │  └─ main.rs             thin bin shim (`[[bin]]`, requires `native`)
 └─ wasm/
@@ -97,18 +113,19 @@ frontend/{mamba1,mamba2}/ index.html + index.js (tracked); `pkg/` = wasm-pack ou
 ### Load path
 
 `hf::<model>::config()` (hardcoded `MambaVocabNetConfig` mirroring the HF `config.json`)
-→ `.init(&device)` → `safetensors_load_mamba{1,2}` overwrites every `Param` in place from
-the mmapped/downloaded safetensors. Gotchas that all live in `safetensors_load.rs`:
+→ `.init(&device)` → `load_mamba` applies a `burn_store::SafetensorsStore` over it. All of
+it is declarative, in `store_load.rs`:
 
-- **Weight names** are `backbone.…` / `backbone.layers.{i}.mixer.…`; layers are written to
-  `mamba.layers.real_layers[i]` (virtual layers are unused here).
-- **Stored dtype differs per model**: mamba-130m is f32 (`load_param_f32_to_f32`),
-  mamba2-130m is f16 (`load_param_f16_to_f32`) — except `D`, which is f32 there too.
-  Everything is materialised as f32 regardless (`Precision = f32`).
-- **`swap_dims: true`** on `Linear` weights (PyTorch `[out,in]` → Burn `[in,out]`), each
-  followed by a `from_data(into_data())` round-trip to force contiguity.
-- **`lm_head` is tied**: configs set `missing_lm_head: true`, and the loader builds the head
-  by transposing the embedding at the end.
+- **Key remapping** rewrites `backbone.layers.{i}.mixer.X` →
+  `layers.real_layers.{i}.mamba_block.X`, `norm*.weight` → `norm*.gamma`, and per-model
+  `A_log`/`D`/`dt_bias` → `a_log{_h}`/`d{_h}`/`dt_bias_h` (virtual layers are unused here).
+- **`skip_enum_variants(true)`** drops the `MambaVocabNet::Mamba{1,2}` path segment.
+- **Adapters**: `PyTorchToBurnAdapter` transposes `Linear` weights (`[out,in]` → `[in,out]`),
+  then `FloatCastAdapter::to(F32)` materialises everything as f32 (`Precision = f32`) — which
+  is why f32 mamba-130m and f16 mamba2-130m share one code path.
+- **`lm_head` is tied**: configs set `missing_lm_head: true`, so `tie_lm_head` builds the head
+  by transposing the embedding after the store has been applied.
+- Missing params are a hard error; leftover checkpoint tensors are only logged.
 
 ### Two run modes, one model
 
@@ -136,26 +153,22 @@ and the backend is a runtime `Device`. Every entry point does
 
 ### Browser asset lifecycle (Yew)
 
-Uses a **fork of `hf-hub`** (`swfsql/hf-hub`) whose `wasm` feature caches range-fetched
-chunks in **IndexedDB**. Each asset (tokenizer, mamba) is a `ModelData` carrying independent
-`Cache` (on-disk/IndexedDB) and `Load` (in-memory bytes) state, so the UI can offer
-fetch / erase / load / unload separately. Loaded bytes are fed to
-`MambaWrapperBuilder::with`, which drops the raw `Vec<u8>` as it builds; the `Wrapper` is
-only assembled once **both** assets are built.
-
-### What comes from candle
-
-`candle-core`/`candle-transformers` are used **only** for sampling — `LogitsProcessor`
-(temp/top-p) and `apply_repeat_penalty` — plus `tokenizers`. Logits are pulled off the Burn
-tensor to a host `Vec<f32>` and re-wrapped as a candle CPU tensor for that step. No model
-math runs in candle.
+Each asset (tokenizer, mamba) is a `ModelData` carrying independent `Cache` (IndexedDB) and
+`Load` (in-memory bytes) state, so the UI can offer fetch / erase / load / unload
+separately. `hub::wasm::ApiRepo::check` turns a `Metadata` into a `ChunkList` — `Ok` per
+cached chunk, `Err` per chunk still to fetch — which is both the fetch plan and the
+progress bar. Loaded bytes are fed to `MambaWrapperBuilder::with`, which drops the raw
+`Vec<u8>` as it builds; the `Wrapper` is only assembled once **both** assets are built.
 
 ## Key Design Decisions & Conventions
 
 - **This repo is glue only.** Anything about SSM math, cache shapes, `Mamba*Config` fields
   or `SsdPath` belongs to `../burn-mamba/` — read its `CLAUDE.md`/`files.md` first
   (see [Extra References](#extra-references)).
-- **Deps are git-rev-pinned** (`burn`, `burn-mamba`, `hf-hub`). `Cargo.toml` keeps
+- **No candle / tokenizers / hf-hub.** Sampling, the `tokenizer.json` pipeline and the hub
+  client are all in `common/`; weight loading goes through `burn-store`. Reach for a Burn
+  crate before adding a dependency back.
+- **Deps are git-rev-pinned** (`burn`, `burn-mamba`). `Cargo.toml` keeps
   commented `path = "../burn-mamba"` / `"../burn/crates/burn"` lines for local development —
   switch to those when changing both repos together, and switch back before committing.
 - **Configs are hardcoded**, not read from HF `config.json`; the constants in
@@ -163,8 +176,8 @@ math runs in candle.
   between the two models (8 vs 16).
 - **Feature-cfg'd bindings are the norm** in entry points — new code touching model choice
   should keep the `#[cfg(feature = "mamba1")] / #[cfg(feature = "mamba2")]` pairing, and
-  `#[allow(unreachable_patterns)]` / `#[allow(irrefutable_let_patterns)]` on the
-  `MambaVocabNet*` matches (the enum has one variant under a single feature).
+  `#[allow(irrefutable_let_patterns)]` on the `MambaVocabNet*` matches (the enum has one
+  variant under a single feature — so no catch-all arm, which would be unreachable).
 - **`frontend/*/pkg/` is generated** by `wasm-pack` and untracked; only `index.html` and
   `index.js` are in git. Don't hand-edit `pkg/`.
 - **CI = deploy.** `.github/workflows/deploy.yml` builds *both* models' yew bundles on push
@@ -202,10 +215,10 @@ what actually builds:
 - `../burn-mamba/` — the SSM blocks this app runs. **Start here** for anything model-side;
   it has its own `CLAUDE.md` + `files.md` (per-file signature reference).
 - `../burn/` — the Burn framework source (tensor ops, `Module`/`Param`, the Dispatch
-  backend, `nn::Linear`), for when a Burn API is unclear.
-- `../hf-hub/` — the `swfsql/hf-hub` fork this depends on: `src/api/{sync,wasm}.rs` are the
-  two APIs used here (native download vs range-fetch + IndexedDB caching), `src/types.rs`
-  the `RepoId`/`FilePath`/`TmpFileBlobKey` newtypes threaded through `yew_ui`.
+  backend, `nn::Linear`, and `crates/burn-store/` for the import machinery), for when a
+  Burn API is unclear.
+- `../hf-hub/`, `../candle/`, `../tokenizers/` — **no longer dependencies**; kept as the
+  reference implementations `common/{hub,sampling,tokenizer}` were written against.
 
 ## Custom Commands
 

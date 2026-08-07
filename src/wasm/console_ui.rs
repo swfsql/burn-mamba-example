@@ -1,10 +1,8 @@
-use crate::{LogitsProcessorWrapper, MambaWrapper, hf};
+use crate::hub::wasm::Api;
+use crate::hub::{FilePath, Repo, RepoId, RepoType, RevisionPath};
+use crate::tokenizer::Tokenizer;
+use crate::{Checkpoint, LogitsProcessorWrapper, MambaWrapper, hf, load_mamba};
 use burn::prelude::*;
-use hf_hub::{
-    Repo, RepoType,
-    api::wasm::Api,
-    types::{FilePath, RepoId, RevisionPath},
-};
 
 pub async fn run() -> anyhow::Result<()> {
     #[cfg(feature = "mamba1")]
@@ -28,7 +26,7 @@ pub async fn run() -> anyhow::Result<()> {
 
         // gets first token (as if it were an implicit output)
         if let Some(t) = tokens.first() {
-            if let Some(t) = models.tokenizer.next_token(*t as u32)? {
+            if let Some(t) = models.tokenizer.next_token(*t as u32) {
                 output += &t;
             }
         }
@@ -56,13 +54,13 @@ pub async fn run() -> anyhow::Result<()> {
             }
 
             // if the token has some valid representation, print it
-            if let Some(t) = models.tokenizer.next_token(next_token as u32)? {
+            if let Some(t) = models.tokenizer.next_token(next_token as u32) {
                 output += &t;
             };
 
             i += 1;
         }
-        if let Some(rest) = models.tokenizer.decode_rest().map_err(anyhow::Error::msg)? {
+        if let Some(rest) = models.tokenizer.decode_rest() {
             output += &rest;
         }
     }
@@ -80,143 +78,50 @@ pub async fn run() -> anyhow::Result<()> {
 
 #[cfg(feature = "mamba1")]
 pub async fn models_mamba1() -> anyhow::Result<MambaWrapper> {
-    use crate::safetensors_load_mamba1;
-
-    let api = Api::new().await?;
-
-    let tokenizer_filename = {
-        let timing = web_time::Instant::now();
-        let filename = api
-            .model(RepoId(hf::tokenizer::REPO_ID.into()))
-            .get(&FilePath(hf::tokenizer::FILE_PATH_TOKENIZER_JSON.into()))
-            .await?;
-        log::info!(
-            "finished downloading/checking tokenizer in {}ms",
-            timing.elapsed().as_millis()
-        ); // 4s/2s
-        filename
-    };
-
-    let mamba_filename = {
-        let timing = web_time::Instant::now();
-        let repo = api.repo(Repo::with_revision(
-            RepoId(hf::mamba1_130m::REPO_ID.into()),
-            RepoType::Model,
-            RevisionPath(hf::mamba1_130m::REVISION_PATH.into()),
-        ));
-        let filename = repo
-            .get(&FilePath(
-                hf::mamba1_130m::FILE_PATH_MODEL_SAFETENSORS.into(),
-            ))
-            .await?;
-        log::info!(
-            "finished downloading/checking the mamba model in {}ms",
-            timing.elapsed().as_millis()
-        ); // ~180s/2s
-        filename
-    };
-
-    let tokenizer = {
-        let timing = web_time::Instant::now();
-        log::info!("loading tokenizer data");
-        let tokenizer = api.load_bytes(&tokenizer_filename).await.unwrap();
-        log::info!(
-            "tokenizer data loaded in {}ms",
-            timing.elapsed().as_millis()
-        ); // ~100ms
-
-        let timing = web_time::Instant::now();
-        log::info!("loading tokenizer");
-        let tokenizer = tokenizers::Tokenizer::from_bytes(tokenizer).map_err(anyhow::Error::msg)?;
-        log::info!("tokenizer loaded in {}ms", timing.elapsed().as_millis()); // ~200ms
-        tokenizer
-    };
-
-    let mut device: Device = Default::default();
-    {
-        device
-            .configure((crate::PRECISION_FLOAT_D_TYPE, crate::PRECISION_INT_D_TYPE))
-            .expect("Failed to install fp32/i32 device defaults");
-    }
-    
-    let mamba_config = hf::mamba1_130m::config();
-    let mamba = {
-        let timing = web_time::Instant::now();
-        log::info!("loading mamba data");
-        let mamba_bytes = api.load_bytes(&mamba_filename).await.unwrap();
-        log::info!("mamba data loaded in {}ms", timing.elapsed().as_millis()); // ~2-3s
-
-        let timing = web_time::Instant::now();
-        log::info!("initializing and loading mamba model");
-        let mamba = safetensors_load_mamba1(&mamba_bytes, mamba_config.clone(), &device)?;
-        log::info!(
-            "mamba initialized and loaded in {}ms",
-            timing.elapsed().as_millis()
-        );
-
-        mamba
-    };
-
-    let models = MambaWrapper::new(
-        tokenizer,
-        mamba,
-        mamba_config,
-    );
-
-    Ok(models)
+    models(
+        hf::mamba1_130m::REPO_ID,
+        hf::mamba1_130m::REVISION_PATH,
+        hf::mamba1_130m::FILE_PATH_MODEL_SAFETENSORS,
+        hf::mamba1_130m::config(),
+    )
+    .await
 }
 
 #[cfg(feature = "mamba2")]
 pub async fn models_mamba2() -> anyhow::Result<MambaWrapper> {
-    use crate::safetensors_load_mamba2;
+    models(
+        hf::mamba2_130m::REPO_ID,
+        hf::mamba2_130m::REVISION_PATH,
+        hf::mamba2_130m::FILE_PATH_MODEL_SAFETENSORS,
+        hf::mamba2_130m::config(),
+    )
+    .await
+}
 
+/// Fetches (or reuses the IndexedDB cache of) the tokenizer and the checkpoint,
+/// then builds the model.
+async fn models(
+    repo_id: &str,
+    revision_path: &str,
+    model_file: &str,
+    mamba_config: burn_mamba::prelude::MambaVocabNetConfig,
+) -> anyhow::Result<MambaWrapper> {
     let api = Api::new().await?;
-
-    let tokenizer_filename = {
-        let timing = web_time::Instant::now();
-        let filename = api
-            .model(RepoId(hf::tokenizer::REPO_ID.into()))
-            .get(&FilePath(hf::tokenizer::FILE_PATH_TOKENIZER_JSON.into()))
-            .await?;
-        log::info!(
-            "finished downloading/checking tokenizer in {}ms",
-            timing.elapsed().as_millis()
-        ); // 4s/2s
-        filename
-    };
-
-    let mamba_filename = {
-        let timing = web_time::Instant::now();
-        let repo = api.repo(Repo::with_revision(
-            RepoId(hf::mamba2_130m::REPO_ID.into()),
-            RepoType::Model,
-            RevisionPath(hf::mamba2_130m::REVISION_PATH.into()),
-        ));
-        let filename = repo
-            .get(&FilePath(
-                hf::mamba2_130m::FILE_PATH_MODEL_SAFETENSORS.into(),
-            ))
-            .await?;
-        log::info!(
-            "finished downloading/checking the mamba model in {}ms",
-            timing.elapsed().as_millis()
-        ); // ~180s/2s
-        filename
-    };
 
     let tokenizer = {
         let timing = web_time::Instant::now();
-        log::info!("loading tokenizer data");
-        let tokenizer = api.load_bytes(&tokenizer_filename).await.unwrap();
+        let bytes = api
+            .model(RepoId(hf::tokenizer::REPO_ID.into()))
+            .get_bytes(&FilePath(hf::tokenizer::FILE_PATH_TOKENIZER_JSON.into()))
+            .await?;
         log::info!(
             "tokenizer data loaded in {}ms",
             timing.elapsed().as_millis()
-        ); // ~100ms
+        );
 
         let timing = web_time::Instant::now();
-        log::info!("loading tokenizer");
-        let tokenizer = tokenizers::Tokenizer::from_bytes(tokenizer).map_err(anyhow::Error::msg)?;
-        log::info!("tokenizer loaded in {}ms", timing.elapsed().as_millis()); // ~200ms
+        let tokenizer = Tokenizer::from_bytes(&bytes)?;
+        log::info!("tokenizer loaded in {}ms", timing.elapsed().as_millis());
         tokenizer
     };
 
@@ -227,29 +132,27 @@ pub async fn models_mamba2() -> anyhow::Result<MambaWrapper> {
             .expect("Failed to install fp32/i32 device defaults");
     }
 
-    let mamba_config = hf::mamba2_130m::config();
     let mamba = {
         let timing = web_time::Instant::now();
-        log::info!("loading mamba data");
-        let mamba_bytes = api.load_bytes(&mamba_filename).await.unwrap();
-        log::info!("mamba data loaded in {}ms", timing.elapsed().as_millis()); // ~2-3s
+        let bytes = api
+            .repo(Repo::with_revision(
+                RepoId(repo_id.into()),
+                RepoType::Model,
+                RevisionPath(revision_path.into()),
+            ))
+            .get_bytes(&FilePath(model_file.into()))
+            .await?;
+        log::info!("mamba data loaded in {}ms", timing.elapsed().as_millis());
 
         let timing = web_time::Instant::now();
         log::info!("initializing and loading mamba model");
-        let mamba = safetensors_load_mamba2(&mamba_bytes, mamba_config.clone(), &device)?;
+        let mamba = load_mamba(Checkpoint::Bytes(bytes), mamba_config.clone(), &device)?;
         log::info!(
             "mamba initialized and loaded in {}ms",
             timing.elapsed().as_millis()
         );
-
         mamba
     };
 
-    let models = MambaWrapper::new(
-        tokenizer,
-        mamba,
-        mamba_config,
-    );
-
-    Ok(models)
+    Ok(MambaWrapper::new(tokenizer, mamba, mamba_config))
 }
