@@ -153,7 +153,8 @@ math runs in candle.
 ## Key Design Decisions & Conventions
 
 - **This repo is glue only.** Anything about SSM math, cache shapes, `Mamba*Config` fields
-  or `SsdPath` belongs to `../burn-mamba/` — read its `CLAUDE.md`/`files.md` first.
+  or `SsdPath` belongs to `../burn-mamba/` — read its `CLAUDE.md`/`files.md` first
+  (see [Extra References](#extra-references)).
 - **Deps are git-rev-pinned** (`burn`, `burn-mamba`, `hf-hub`). `Cargo.toml` keeps
   commented `path = "../burn-mamba"` / `"../burn/crates/burn"` lines for local development —
   switch to those when changing both repos together, and switch back before committing.
@@ -177,8 +178,36 @@ math runs in candle.
 ## Documentation Maintenance
 
 - Keep this file **as minimal as possible while still viable**; prefer pointing at the
-  source over duplicating it. When a source file changes, update its one entry.
+  source over duplicating it. When a source file changes, update its one entry. Always be
+  **extremely succint** when adding content.
 - **Never use it as a changelog** — it describes the code as it *is now*: no
-  "used to be / now", dates, migrations, or PR history. Delete changelog-style prose on sight.
+  "used to be / now", "verified by", dates, migrations, or PR history. Delete
+  changelog-style prose on sight.
 - `README.md` is the user-facing doc (build recipes, backend correctness table, sample
   outputs); keep the two in sync rather than duplicating detail here.
+- When a source file is added/removed/changed, prepare an update to its
+  [File Map](#file-map) entry (per the rules above). Important rule: this is **reserved to
+  the end of your workload**, and if by then you haven't yet read this file / `README.md`,
+  **do not** read them — your context is big from the work and re-reading is expensive.
+  Instead write a `tmp.md` holding what the new entry would be, plus a succint overview of
+  the most important aspects of the created/removed/updated files. After a full context
+  reset, manually triggered by the user, we actually update those files.
+
+## Extra References
+
+Sibling checkouts under `../`, **read-only reference** (this repo is the only thing to
+write to). Their HEAD may differ from the rev pinned in `Cargo.toml` — the pin wins for
+what actually builds:
+
+- `../burn-mamba/` — the SSM blocks this app runs. **Start here** for anything model-side;
+  it has its own `CLAUDE.md` + `files.md` (per-file signature reference).
+- `../burn/` — the Burn framework source (tensor ops, `Module`/`Param`, the Dispatch
+  backend, `nn::Linear`), for when a Burn API is unclear.
+- `../hf-hub/` — the `swfsql/hf-hub` fork this depends on: `src/api/{sync,wasm}.rs` are the
+  two APIs used here (native download vs range-fetch + IndexedDB caching), `src/types.rs`
+  the `RepoId`/`FilePath`/`TmpFileBlobKey` newtypes threaded through `yew_ui`.
+
+## Custom Commands
+
+- `rg`: available.
+- `git`: forbidden — never run it (see the commit-message rule above).

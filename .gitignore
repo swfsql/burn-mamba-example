@@ -2,3 +2,4 @@
 .zed/
 bacon.toml
 miniserve
+.claude/
