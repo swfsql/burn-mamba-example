@@ -138,7 +138,12 @@ fn key_remapping(config: &MambaVocabNetConfig) -> Vec<(&'static str, &'static st
 
 /// The checkpoints tie the LM head to the embedding (`missing_lm_head: true`),
 /// so the head is the transposed embedding table.
-fn tie_lm_head(mamba: &mut MambaVocabNet, device: &Device) {
+///
+/// Public because it is the second half of building a runnable model: anything
+/// that assembles one without a checkpoint — `benches/model.rs` builds the same
+/// topology on random weights — must materialise the head the same way, or it
+/// measures `VocabNetwork::apply_lm_head`'s transpose-per-call fallback instead.
+pub fn tie_lm_head(mamba: &mut MambaVocabNet, device: &Device) {
     let embedding_weight = match mamba {
         #[cfg(feature = "mamba1")]
         MambaVocabNet::Mamba1(m) => m.embedding.weight.val(),

@@ -58,6 +58,13 @@ required-features = ["native"]
 [[bench]]
 name = "allocations"
 harness = false
+## it profiles `native::main()`, which only exists under this feature
+required-features = ["native"]
+
+## whole-model forward/step timings; see benches/model.rs and ./bench.sh
+[[bench]]
+name = "model"
+harness = false
 
 [dependencies]
 anyhow = "1.0.0"
@@ -125,3 +132,8 @@ humansize = { version = "2.1.3", optional = true }
 
 [dev-dependencies]
 divan = "0.1.21"
+## `cargo_bench_support` is what lets a `harness = false` bench run under
+## `cargo bench`; the default features additionally pull rayon and plotters.
+criterion = { version = "0.8.2", default-features = false, features = [
+    "cargo_bench_support",
+] }

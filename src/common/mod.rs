@@ -6,7 +6,7 @@ pub mod token_output_stream;
 pub mod tokenizer;
 
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
-pub use store_load::{Checkpoint, load_mamba};
+pub use store_load::{Checkpoint, load_mamba, tie_lm_head};
 
 #[allow(unused_imports)]
 use burn::prelude::*;

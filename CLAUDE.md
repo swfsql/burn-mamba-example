@@ -72,6 +72,12 @@ wasm-pack build --release --target web --out-dir "frontend/mamba3-mimo/pkg" --no
 TOKENIZER_JSON=… TOKENIZER_IDS=… cargo test --no-default-features -- --ignored
 
 cargo bench --bench allocations --no-default-features --features "native,backend-flex,backend-simd,mamba2"
+
+# whole-model forward/step timings — three backend builds, writes bench.md; needs no
+# download (real topology, random weights). Optional arg = criterion filter
+./bench.sh
+BENCH_SEQ=1024 ./bench.sh
+BENCH_SKIP=cuda,cuda-fusion-autotune ./bench.sh step
 ```
 
 - Running **downloads the weights** from HF on first use (native: `~/.cache`; wasm:
@@ -102,9 +108,10 @@ src/
 │  │                      padded_vocab_size / empty_caches helpers; tests over the
 │  │                      compiled-in list (priority order, per-checkpoint chunk size)
 │  ├─ store_load.rs       `load_mamba(Checkpoint::{File,Bytes}, config, device)` — the
-│  │                      `burn-store` import (key remapping + adapters) + `tie_lm_head`;
-│  │                      tests replay the vendored mamba3 safetensors manifests through
-│  │                      `key_remapping` and diff against the built module's params
+│  │                      `burn-store` import (key remapping + adapters) + `tie_lm_head`
+│  │                      (public: building a runnable model without a checkpoint needs
+│  │                      it too); tests replay the vendored mamba3 safetensors manifests
+│  │                      through `key_remapping` and diff against the built module's params
 │  ├─ sampling.rs         `LogitsProcessor` (argmax / temperature / top-k / top-p) and
 │  │                      `apply_repeat_penalty`, both over a plain `[f32]`
 │  ├─ tokenizer/          `tokenizer.json` reader (replaces the `tokenizers` crate);
@@ -148,7 +155,21 @@ src/
       │                   `gloo_timers::Interval` tick so the browser keeps painting
       └─ view.rs          Bulma-styled html!: asset cards (fetch/erase/load/unload) + prompt
                           textarea + start/stop/resume/reset controls
-benches/allocations.rs    divan AllocProfiler around `native::main()`
+benches/allocations.rs    divan AllocProfiler around `native::main()` (`required-features`
+                          = `native`)
+benches/model.rs          criterion `forward`/`step` over every `hf::MODELS` entry: the
+                          checkpoint's own `config()`/`ssd_path()` on random weights, plus
+                          `tie_lm_head`. One model at a time, built *inside* the bench
+                          closure (criterion skips it when filtered out); `device()` is
+                          `Once`-guarded since `configure` refuses a second call. Env:
+                          `BENCH_{BATCH,SEQ,SAMPLES,TIME_MS,WARMUP_ITERS,SYNC_EVERY}`
+                          (`SYNC_EVERY` defaults to 1 — both run modes end in `into_data`)
+bench.sh                  runs `--bench model` in the three backend feature sets (flex /
+                          cuda / cuda+fusion+autotune), each with its own
+                          `CARGO_TARGET_DIR` + criterion baseline, then parses the logs
+                          into bench.md. Fusion and autotune are compile-time, hence the
+                          separate builds
+bench.md                  generated benchmark report (tracked)
 frontend/{mamba1,mamba2,mamba3-siso,mamba3-mimo}/  index.html + index.js (tracked);
                           `pkg/` = wasm-pack output (ignored)
 .github/workflows/deploy.yml  builds all four wasm bundles on push to main → gh-pages
