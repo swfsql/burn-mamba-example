@@ -58,6 +58,7 @@ cargo run --release --no-default-features --features "native,backend-flex,backen
 
 Notes:
 - This will automatically download model weights, load and run them, first in sequential mode and then in parallel mode.
+- Weights and the tokenizer are cached under `$HF_HOME/hub` (by default `~/.cache/huggingface/hub`), in the same layout the HuggingFace tools use - so an already populated cache is reused.
 
 ##### WASM
 
@@ -91,6 +92,7 @@ miniserve -i 127.0.0.1 "frontend/"
 For Mamba-1, Then open the page at [http://127.0.0.1:8080/mamba1/index.html](http://127.0.0.1:8080/mamba1/index.html).
 Nots:
 - This won't download anything by default, and you must click buttons to download, load and run the model - which is run in sequential mode.
+- Downloads are cached in IndexedDB as 10MB chunks, so they resume across reloads and can be erased from the page.
 - `wasm-opt` is disabled for `yew` with `wasm-pack build --no-opt`.
 
 ### Dev
