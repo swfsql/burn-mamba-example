@@ -63,7 +63,10 @@ pub fn load_mamba(
             result.unused
         );
     }
-    log::info!("loaded {} tensors from the checkpoint", result.applied.len());
+    log::info!(
+        "loaded {} tensors from the checkpoint",
+        result.applied.len()
+    );
 
     tie_lm_head(&mut mamba, device);
 
@@ -115,8 +118,14 @@ fn key_remapping(config: &MambaVocabNetConfig) -> Vec<(&'static str, &'static st
             rules.push((r"\.mamba_block\.C_bias$", ".mamba_block.c_bias_hmr"));
             // The QK-norms are `B_norm`/`C_norm`, which the generic `norm.weight`
             // rule above deliberately does not reach (it anchors on `.norm`).
-            rules.push((r"\.mamba_block\.B_norm\.weight$", ".mamba_block.b_norm.gamma"));
-            rules.push((r"\.mamba_block\.C_norm\.weight$", ".mamba_block.c_norm.gamma"));
+            rules.push((
+                r"\.mamba_block\.B_norm\.weight$",
+                ".mamba_block.b_norm.gamma",
+            ));
+            rules.push((
+                r"\.mamba_block\.C_norm\.weight$",
+                ".mamba_block.c_norm.gamma",
+            ));
             // MIMO-only; absent from the SISO checkpoint, where the rules simply
             // match nothing.
             rules.push((r"\.mamba_block\.mimo_x$", ".mamba_block.mimo_x_hmp"));

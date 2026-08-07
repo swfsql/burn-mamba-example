@@ -95,14 +95,16 @@ impl Api {
     pub async fn new() -> Result<Self, HubError> {
         let mut request = IdbDatabase::open_u32(DB_NAME, DB_VERSION)
             .map_err(|e| dom_err("opening the cache database", e))?;
-        request.set_on_upgrade_needed(Some(|event: &IdbVersionChangeEvent| -> Result<(), JsValue> {
-            let existing: Vec<String> = event.db().object_store_names().collect();
-            if !existing.iter().any(|name| name == CHUNK_STORE) {
-                log::info!("creating the IndexedDB object store {CHUNK_STORE}");
-                event.db().create_object_store(CHUNK_STORE)?;
-            }
-            Ok(())
-        }));
+        request.set_on_upgrade_needed(Some(
+            |event: &IdbVersionChangeEvent| -> Result<(), JsValue> {
+                let existing: Vec<String> = event.db().object_store_names().collect();
+                if !existing.iter().any(|name| name == CHUNK_STORE) {
+                    log::info!("creating the IndexedDB object store {CHUNK_STORE}");
+                    event.db().create_object_store(CHUNK_STORE)?;
+                }
+                Ok(())
+            },
+        ));
         let db = request
             .await
             .map_err(|e| dom_err("opening the cache database", e))?;
@@ -166,10 +168,13 @@ impl Api {
         let total = chunks.last().map(|c| c.end).unwrap_or(0);
         let mut bytes = Vec::with_capacity(total);
         for chunk in chunks {
-            let stored = self.get_chunk(chunk).await?.ok_or_else(|| HubError::Cache {
-                context: chunk.key.clone(),
-                message: "chunk is missing from the cache".into(),
-            })?;
+            let stored = self
+                .get_chunk(chunk)
+                .await?
+                .ok_or_else(|| HubError::Cache {
+                    context: chunk.key.clone(),
+                    message: "chunk is missing from the cache".into(),
+                })?;
             bytes.extend_from_slice(&stored.to_vec());
         }
         Ok(bytes)
@@ -187,9 +192,7 @@ impl Api {
                 .map_err(|e| dom_err(&chunk.key, e))?
                 .await
                 .map_err(|e| dom_err(&chunk.key, e))?;
-            tx.await
-                .into_result()
-                .map_err(|e| dom_err(&chunk.key, e))?;
+            tx.await.into_result().map_err(|e| dom_err(&chunk.key, e))?;
         }
         Ok(())
     }
@@ -210,9 +213,7 @@ impl Api {
             .map_err(|e| dom_err(&chunk.key, e))?
             .await
             .map_err(|e| dom_err(&chunk.key, e))?;
-        tx.await
-            .into_result()
-            .map_err(|e| dom_err(&chunk.key, e))?;
+        tx.await.into_result().map_err(|e| dom_err(&chunk.key, e))?;
         Ok(value.map(Uint8Array::from))
     }
 
@@ -226,9 +227,7 @@ impl Api {
             .map_err(|e| dom_err(&chunk.key, e))?
             .await
             .map_err(|e| dom_err(&chunk.key, e))?;
-        tx.await
-            .into_result()
-            .map_err(|e| dom_err(&chunk.key, e))?;
+        tx.await.into_result().map_err(|e| dom_err(&chunk.key, e))?;
         Ok(())
     }
 
@@ -267,7 +266,9 @@ impl Api {
                 .map_err(|e| dom_err(blob_prefix, e))?,
             None => vec![],
         };
-        tx.await.into_result().map_err(|e| dom_err(blob_prefix, e))?;
+        tx.await
+            .into_result()
+            .map_err(|e| dom_err(blob_prefix, e))?;
 
         Ok(keys
             .into_iter()
@@ -288,9 +289,12 @@ pub struct ApiRepo {
 impl ApiRepo {
     /// The download URL of `filename` in this repo.
     pub fn url(&self, filename: &FilePath) -> FileUrl {
-        self.api
-            .url_template
-            .url(&self.api.endpoint, &self.repo, &self.repo.revision, filename)
+        self.api.url_template.url(
+            &self.api.endpoint,
+            &self.repo,
+            &self.repo.revision,
+            filename,
+        )
     }
 
     /// Plans the chunk list for a file: which ranges are cached and which are not.
@@ -378,11 +382,7 @@ impl ApiRepo {
 
     /// `huggingface/hub/models--…/blobs/<etag>`.
     fn blob_prefix(&self, etag: &BlobHash) -> String {
-        format!(
-            "{CACHE_ROOT}/{}/blobs/{}",
-            self.repo.folder_name(),
-            etag.0
-        )
+        format!("{CACHE_ROOT}/{}/blobs/{}", self.repo.folder_name(), etag.0)
     }
 }
 

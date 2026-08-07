@@ -98,9 +98,7 @@ impl Default for Model {
                     repo_id: RepoId(active::tokenizer_source::REPO_ID.into()),
                     repo_type: RepoType::Model,
                     revision: RevisionPath::default(),
-                    filepath: FilePath(
-                        active::tokenizer_source::FILE_PATH_TOKENIZER_JSON.into(),
-                    ),
+                    filepath: FilePath(active::tokenizer_source::FILE_PATH_TOKENIZER_JSON.into()),
                 }),
             ),
             mamba: ModelData::new(
@@ -168,8 +166,7 @@ impl MambaWrapperBuilder {
                     log::info!("initializing and loading mamba model");
 
                     let mamba_config = self.mamba_config.clone().expect("missing mamba config");
-                    let mamba =
-                        load_mamba(Checkpoint::Bytes(data), mamba_config, device).unwrap();
+                    let mamba = load_mamba(Checkpoint::Bytes(data), mamba_config, device).unwrap();
                     log::info!(
                         "mamba initialized and loaded in {}ms",
                         timing.elapsed().as_millis()

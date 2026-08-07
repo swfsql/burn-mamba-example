@@ -106,11 +106,18 @@ impl Api {
             })?;
         // Absent when the hub is not the responder; only used to name the snapshot
         // directory, so an empty value is survivable.
-        let commit_hash = response.header("x-repo-commit").unwrap_or_default().to_string();
+        let commit_hash = response
+            .header("x-repo-commit")
+            .unwrap_or_default()
+            .to_string();
         let size = response
             .header("x-linked-size")
             .and_then(|s| s.trim().parse().ok())
-            .or_else(|| response.header("content-range").and_then(size_from_content_range))
+            .or_else(|| {
+                response
+                    .header("content-range")
+                    .and_then(size_from_content_range)
+            })
             .ok_or(HubError::Header {
                 name: "content-range",
                 url: current.clone(),
@@ -134,9 +141,12 @@ pub struct ApiRepo {
 impl ApiRepo {
     /// The download URL of `filename` in this repo.
     pub fn url(&self, filename: &FilePath) -> FileUrl {
-        self.api
-            .url_template
-            .url(&self.api.endpoint, &self.repo, &self.repo.revision, filename)
+        self.api.url_template.url(
+            &self.api.endpoint,
+            &self.repo,
+            &self.repo.revision,
+            filename,
+        )
     }
 
     /// Returns a local path to `filename`, downloading it if the cache misses.
@@ -167,10 +177,15 @@ impl ApiRepo {
     /// Streams `url` into `blob`, via a temporary file so an interrupted download
     /// never leaves a truncated blob behind.
     fn download_to(&self, url: &FileUrl, blob: &Path, size: usize) -> Result<(), HubError> {
-        let response = self.api.agent.get(&url.0).call().map_err(|e| HubError::Request {
-            url: url.0.clone(),
-            message: e.to_string(),
-        })?;
+        let response = self
+            .api
+            .agent
+            .get(&url.0)
+            .call()
+            .map_err(|e| HubError::Request {
+                url: url.0.clone(),
+                message: e.to_string(),
+            })?;
 
         create_dir_all(blob.parent().expect("blob paths have a parent"))?;
         let temp = blob.with_extension("incomplete");
@@ -188,7 +203,8 @@ impl ApiRepo {
             if read == 0 {
                 break;
             }
-            file.write_all(&buffer[..read]).map_err(|e| cache_err(&temp, e))?;
+            file.write_all(&buffer[..read])
+                .map_err(|e| cache_err(&temp, e))?;
             written += read;
             if size > 0 && written * 10 / size > next_report {
                 next_report = written * 10 / size;
@@ -279,7 +295,10 @@ fn default_cache_dir() -> PathBuf {
 /// Resolves a same-host redirect target against the URL it came from.
 fn join_relative(base: &str, location: &str) -> String {
     // `base` looks like "https://host/path…"; keep everything up to the host.
-    match base.find("://").and_then(|i| base[i + 3..].find('/').map(|j| i + 3 + j)) {
+    match base
+        .find("://")
+        .and_then(|i| base[i + 3..].find('/').map(|j| i + 3 + j))
+    {
         Some(path_start) => format!("{}{}", &base[..path_start], location),
         None => format!("{base}{location}"),
     }

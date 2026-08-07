@@ -63,7 +63,9 @@ impl Bpe {
     /// a *different* segmentation of a word that also exists whole, so skipping
     /// the check changes ids.
     pub fn tokenize(&self, word: &str, vocab: &HashMap<String, u32>) -> Vec<u32> {
-        if self.ignore_merges && let Some(id) = vocab.get(word) {
+        if self.ignore_merges
+            && let Some(id) = vocab.get(word)
+        {
             return vec![*id];
         }
 

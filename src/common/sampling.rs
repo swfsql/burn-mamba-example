@@ -118,7 +118,12 @@ impl LogitsProcessor {
     }
 
     /// Top-k, then top-p within the retained tokens.
-    fn sample_topk_topp(&mut self, prs: &mut [f32], top_k: usize, top_p: f32) -> anyhow::Result<u32> {
+    fn sample_topk_topp(
+        &mut self,
+        prs: &mut [f32],
+        top_k: usize,
+        top_p: f32,
+    ) -> anyhow::Result<u32> {
         if top_k >= prs.len() {
             self.sample_topp(prs, top_p)
         } else {

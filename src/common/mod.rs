@@ -87,7 +87,7 @@ pub mod hf {
             MambaVocabNetConfig::Mamba1 {
                 n_real_layers: N_LAYER, // 24
                 n_virtual_layers: None,
-                vocab_size: VOCAB_SIZE, // 50277
+                vocab_size: VOCAB_SIZE,                           // 50277
                 pad_vocab_size_multiple: PAD_VOCAB_SIZE_MULTIPLE, // 8
                 missing_lm_head: true,
                 ignore_first_residual: false,
@@ -102,7 +102,7 @@ pub mod hf {
                 .with_conv_kernel(4) // default
                 .with_expand(2) // default
                 .with_has_proj_bias(false) // default
-                .with_has_conv_bias(true) // default
+                .with_has_conv_bias(true), // default
             }
         }
     }
@@ -140,7 +140,7 @@ pub mod hf {
             MambaVocabNetConfig::Mamba2 {
                 n_real_layers: N_LAYER, // 24
                 n_virtual_layers: None,
-                vocab_size: VOCAB_SIZE, // 50277
+                vocab_size: VOCAB_SIZE,                           // 50277
                 pad_vocab_size_multiple: PAD_VOCAB_SIZE_MULTIPLE, // 16
                 missing_lm_head: true,
                 ignore_first_residual: false,
@@ -158,7 +158,7 @@ pub mod hf {
                 .with_ngroups(1) // default
                 .with_is_norm_before_gate(false)
                 .with_has_proj_bias(false) // default
-                .with_has_conv_bias(true) // default
+                .with_has_conv_bias(true), // default
             }
         }
     }
@@ -228,7 +228,7 @@ pub mod hf {
                         n_virtual_layers: None,
                         vocab_size: VOCAB_SIZE, // 128256
                         pad_vocab_size_multiple: PAD_VOCAB_SIZE_MULTIPLE, // 16
-                        missing_lm_head: true, // tie_embeddings: true
+                        missing_lm_head: true,  // tie_embeddings: true
                         ignore_first_residual: false,
                         ignore_last_residual: false,
                         residuals: ResidualsConfig::Standard,
@@ -294,9 +294,12 @@ pub struct LogitsProcessorWrapper {
 }
 
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
-impl MambaWrapper
-{
-    pub fn new(tokenizer: Tokenizer, mamba: MambaVocabNet, mamba_config: MambaVocabNetConfig) -> Self {
+impl MambaWrapper {
+    pub fn new(
+        tokenizer: Tokenizer,
+        mamba: MambaVocabNet,
+        mamba_config: MambaVocabNetConfig,
+    ) -> Self {
         Self {
             tokenizer: TokenOutputStream::new(tokenizer),
             mamba,
@@ -547,20 +550,25 @@ pub fn device(model: &MambaVocabNet) -> Device {
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 #[allow(irrefutable_let_patterns)]
 pub fn padded_vocab_size(config: &MambaVocabNetConfig) -> usize {
-    let (vocab_size, pad_vocab_size_multiple) =
-    match config {
+    let (vocab_size, pad_vocab_size_multiple) = match config {
         #[cfg(feature = "mamba1")]
-        MambaVocabNetConfig::Mamba1{vocab_size, pad_vocab_size_multiple, ..} => {
-            (vocab_size, pad_vocab_size_multiple)
-        }
+        MambaVocabNetConfig::Mamba1 {
+            vocab_size,
+            pad_vocab_size_multiple,
+            ..
+        } => (vocab_size, pad_vocab_size_multiple),
         #[cfg(feature = "mamba2")]
-        MambaVocabNetConfig::Mamba2{vocab_size, pad_vocab_size_multiple, ..} => {
-            (vocab_size, pad_vocab_size_multiple)
-        }
+        MambaVocabNetConfig::Mamba2 {
+            vocab_size,
+            pad_vocab_size_multiple,
+            ..
+        } => (vocab_size, pad_vocab_size_multiple),
         #[cfg(feature = "mamba3")]
-        MambaVocabNetConfig::Mamba3{vocab_size, pad_vocab_size_multiple, ..} => {
-            (vocab_size, pad_vocab_size_multiple)
-        }
+        MambaVocabNetConfig::Mamba3 {
+            vocab_size,
+            pad_vocab_size_multiple,
+            ..
+        } => (vocab_size, pad_vocab_size_multiple),
     };
 
     if vocab_size % pad_vocab_size_multiple == 0 {
@@ -571,23 +579,46 @@ pub fn padded_vocab_size(config: &MambaVocabNetConfig) -> usize {
 }
 
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
-pub fn empty_caches(batch: usize, mamba_config: &MambaVocabNetConfig, device: &Device) -> MambaCaches {
+pub fn empty_caches(
+    batch: usize,
+    mamba_config: &MambaVocabNetConfig,
+    device: &Device,
+) -> MambaCaches {
     match mamba_config {
         #[cfg(feature = "mamba1")]
-        MambaVocabNetConfig::Mamba1 {n_real_layers, mamba_block, ..} => {
-            let caches = Mamba1CachesConfig::new_from_block_config(*n_real_layers, batch, mamba_block.clone())
-                .init(device);
+        MambaVocabNetConfig::Mamba1 {
+            n_real_layers,
+            mamba_block,
+            ..
+        } => {
+            let caches = Mamba1CachesConfig::new_from_block_config(
+                *n_real_layers,
+                batch,
+                mamba_block.clone(),
+            )
+            .init(device);
             MambaCaches::Mamba1(caches)
         }
         #[cfg(feature = "mamba2")]
-        MambaVocabNetConfig::Mamba2 {n_real_layers, mamba_block, ..} => {
-            let caches =
-            Mamba2CachesConfig::new_from_block_config(*n_real_layers, batch, mamba_block.clone())
-                .init(device);
+        MambaVocabNetConfig::Mamba2 {
+            n_real_layers,
+            mamba_block,
+            ..
+        } => {
+            let caches = Mamba2CachesConfig::new_from_block_config(
+                *n_real_layers,
+                batch,
+                mamba_block.clone(),
+            )
+            .init(device);
             MambaCaches::Mamba2(caches)
         }
         #[cfg(feature = "mamba3")]
-        MambaVocabNetConfig::Mamba3 {n_real_layers, mamba_block, ..} => {
+        MambaVocabNetConfig::Mamba3 {
+            n_real_layers,
+            mamba_block,
+            ..
+        } => {
             // Mamba-3 caches are pathway-tagged, and the supplied cache is what
             // selects the pathway. Single-SSD is the one a missing cache would
             // have defaulted to, and the one `step` decodes through.
@@ -607,19 +638,21 @@ pub fn empty_caches(batch: usize, mamba_config: &MambaVocabNetConfig, device: &D
 pub fn ssd_path(mamba_config: &MambaVocabNetConfig) -> MambaSsdPath {
     match mamba_config {
         #[cfg(feature = "mamba1")]
-        MambaVocabNetConfig::Mamba1 {..} => MambaSsdPath::Mamba1,
+        MambaVocabNetConfig::Mamba1 { .. } => MambaSsdPath::Mamba1,
         #[cfg(feature = "mamba2")]
-        MambaVocabNetConfig::Mamba2 {..} => MambaSsdPath::Mamba2(Mamba2SsdPath::SerialRecalculated(None)),
+        MambaVocabNetConfig::Mamba2 { .. } => {
+            MambaSsdPath::Mamba2(Mamba2SsdPath::SerialRecalculated(None))
+        }
         // The chunk length the checkpoint was trained with; the two Mamba-3
         // checkpoints disagree (64 for SISO, 16 for MIMO), so it is read from the
         // per-model constant rather than left to the path's own default.
         #[cfg(feature = "mamba3-siso")]
-        MambaVocabNetConfig::Mamba3 {..} => MambaSsdPath::Mamba3(Mamba3SsdPath::SerialRecalculated(
-            Some(hf::mamba3_siso_187m::CHUNK_SIZE),
-        )),
+        MambaVocabNetConfig::Mamba3 { .. } => MambaSsdPath::Mamba3(
+            Mamba3SsdPath::SerialRecalculated(Some(hf::mamba3_siso_187m::CHUNK_SIZE)),
+        ),
         #[cfg(all(feature = "mamba3", not(feature = "mamba3-siso")))]
-        MambaVocabNetConfig::Mamba3 {..} => MambaSsdPath::Mamba3(Mamba3SsdPath::SerialRecalculated(
-            Some(hf::mamba3_mimo_187m::CHUNK_SIZE),
-        )),
+        MambaVocabNetConfig::Mamba3 { .. } => MambaSsdPath::Mamba3(
+            Mamba3SsdPath::SerialRecalculated(Some(hf::mamba3_mimo_187m::CHUNK_SIZE)),
+        ),
     }
 }

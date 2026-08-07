@@ -77,10 +77,16 @@ impl Tokenizer {
         let json: TokenizerJson = serde_json::from_slice(bytes)?;
 
         if json.model.kind != "BPE" {
-            anyhow::bail!("unsupported tokenizer model {:?}, expected BPE", json.model.kind);
+            anyhow::bail!(
+                "unsupported tokenizer model {:?}, expected BPE",
+                json.model.kind
+            );
         }
         for (field, value) in [
-            ("continuing_subword_prefix", &json.model.continuing_subword_prefix),
+            (
+                "continuing_subword_prefix",
+                &json.model.continuing_subword_prefix,
+            ),
             ("end_of_word_suffix", &json.model.end_of_word_suffix),
             ("unk_token", &json.model.unk_token),
         ] {
@@ -150,7 +156,9 @@ impl Tokenizer {
                     .copied()
                     .or_else(|| added.iter().find(|(c, _)| c == token).map(|(_, id)| *id))
                     .ok_or_else(|| {
-                        anyhow::anyhow!("post_processor special token {token:?} is not in the vocabulary")
+                        anyhow::anyhow!(
+                            "post_processor special token {token:?} is not in the vocabulary"
+                        )
                     })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -181,10 +189,12 @@ impl Tokenizer {
 
     /// Looks up a token's id, added tokens included.
     pub fn token_to_id(&self, token: &str) -> Option<u32> {
-        self.vocab
-            .get(token)
-            .copied()
-            .or_else(|| self.added.iter().find(|(c, _)| c == token).map(|(_, id)| *id))
+        self.vocab.get(token).copied().or_else(|| {
+            self.added
+                .iter()
+                .find(|(c, _)| c == token)
+                .map(|(_, id)| *id)
+        })
     }
 
     /// Looks up a token's text, added tokens included.
@@ -315,7 +325,9 @@ fn parse_pre_tokenizer(component: Option<&ComponentJson>) -> anyhow::Result<PreT
                 anyhow::bail!("unsupported ByteLevel pre_tokenizer with add_prefix_space");
             }
             if byte_level.use_regex {
-                anyhow::bail!("a Split pre_tokenizer must be followed by ByteLevel use_regex: false");
+                anyhow::bail!(
+                    "a Split pre_tokenizer must be followed by ByteLevel use_regex: false"
+                );
             }
             Ok(PreTokenization::Llama3)
         }
@@ -520,6 +532,9 @@ mod parity_tests {
                 failures += 1;
             }
         }
-        assert_eq!(failures, 0, "{failures} case(s) disagreed with the reference");
+        assert_eq!(
+            failures, 0,
+            "{failures} case(s) disagreed with the reference"
+        );
     }
 }

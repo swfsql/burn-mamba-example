@@ -243,7 +243,10 @@ fn llama3_match(rest: &str) -> usize {
     // (?i:'s|'t|'re|'ve|'m|'ll|'d)
     if rest.starts_with('\'') {
         for c in CONTRACTIONS {
-            if rest.get(..c.len()).is_some_and(|h| h.eq_ignore_ascii_case(c)) {
+            if rest
+                .get(..c.len())
+                .is_some_and(|h| h.eq_ignore_ascii_case(c))
+            {
                 return c.len();
             }
         }
@@ -340,7 +343,10 @@ mod tests {
     #[test]
     fn splits_like_the_gpt2_regex() {
         assert_eq!(split_words("Mamba is the"), vec!["Mamba", " is", " the"]);
-        assert_eq!(split_words("Hello, world!"), vec!["Hello", ",", " world", "!"]);
+        assert_eq!(
+            split_words("Hello, world!"),
+            vec!["Hello", ",", " world", "!"]
+        );
         // A lone space before a word attaches to the word; extra spaces stay behind.
         assert_eq!(split_words("a  b"), vec!["a", " ", " b"]);
         // Trailing whitespace is kept whole (nothing follows it).

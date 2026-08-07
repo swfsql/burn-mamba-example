@@ -37,8 +37,7 @@ pub fn main() -> anyhow::Result<()> {
     info!("running in parallel mode (training-friendly)");
     let sample_len = 20;
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
-    let (sample_len, start) =
-        models.run_parallel("Mamba is the", sample_len, &mut processor)?;
+    let (sample_len, start) = models.run_parallel("Mamba is the", sample_len, &mut processor)?;
     println!();
     let elapsed = start.unwrap().elapsed().as_millis();
     let total_sample_len = (1 + sample_len) * sample_len / 2;
