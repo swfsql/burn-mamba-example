@@ -9,6 +9,10 @@ pub async fn run() -> anyhow::Result<()> {
     let mut models = models_mamba1().await?;
     #[cfg(feature = "mamba2")]
     let mut models = models_mamba2().await?;
+    #[cfg(feature = "mamba3-siso")]
+    let mut models = models_mamba3_siso().await?;
+    #[cfg(feature = "mamba3-mimo")]
+    let mut models = models_mamba3_mimo().await?;
 
     let prompt = "Mamba is the";
     let sample_len = 30;
@@ -82,6 +86,8 @@ pub async fn models_mamba1() -> anyhow::Result<MambaWrapper> {
         hf::mamba1_130m::REPO_ID,
         hf::mamba1_130m::REVISION_PATH,
         hf::mamba1_130m::FILE_PATH_MODEL_SAFETENSORS,
+        hf::mamba1_130m::tokenizer_source::REPO_ID,
+        hf::mamba1_130m::tokenizer_source::FILE_PATH_TOKENIZER_JSON,
         hf::mamba1_130m::config(),
     )
     .await
@@ -93,7 +99,35 @@ pub async fn models_mamba2() -> anyhow::Result<MambaWrapper> {
         hf::mamba2_130m::REPO_ID,
         hf::mamba2_130m::REVISION_PATH,
         hf::mamba2_130m::FILE_PATH_MODEL_SAFETENSORS,
+        hf::mamba2_130m::tokenizer_source::REPO_ID,
+        hf::mamba2_130m::tokenizer_source::FILE_PATH_TOKENIZER_JSON,
         hf::mamba2_130m::config(),
+    )
+    .await
+}
+
+#[cfg(feature = "mamba3-siso")]
+pub async fn models_mamba3_siso() -> anyhow::Result<MambaWrapper> {
+    models(
+        hf::mamba3_siso_187m::REPO_ID,
+        hf::mamba3_siso_187m::REVISION_PATH,
+        hf::mamba3_siso_187m::FILE_PATH_MODEL_SAFETENSORS,
+        hf::mamba3_siso_187m::tokenizer_source::REPO_ID,
+        hf::mamba3_siso_187m::tokenizer_source::FILE_PATH_TOKENIZER_JSON,
+        hf::mamba3_siso_187m::config(),
+    )
+    .await
+}
+
+#[cfg(feature = "mamba3-mimo")]
+pub async fn models_mamba3_mimo() -> anyhow::Result<MambaWrapper> {
+    models(
+        hf::mamba3_mimo_187m::REPO_ID,
+        hf::mamba3_mimo_187m::REVISION_PATH,
+        hf::mamba3_mimo_187m::FILE_PATH_MODEL_SAFETENSORS,
+        hf::mamba3_mimo_187m::tokenizer_source::REPO_ID,
+        hf::mamba3_mimo_187m::tokenizer_source::FILE_PATH_TOKENIZER_JSON,
+        hf::mamba3_mimo_187m::config(),
     )
     .await
 }
@@ -104,6 +138,8 @@ async fn models(
     repo_id: &str,
     revision_path: &str,
     model_file: &str,
+    tokenizer_repo_id: &str,
+    tokenizer_file: &str,
     mamba_config: burn_mamba::prelude::MambaVocabNetConfig,
 ) -> anyhow::Result<MambaWrapper> {
     let api = Api::new().await?;
@@ -111,8 +147,8 @@ async fn models(
     let tokenizer = {
         let timing = web_time::Instant::now();
         let bytes = api
-            .model(RepoId(hf::tokenizer::REPO_ID.into()))
-            .get_bytes(&FilePath(hf::tokenizer::FILE_PATH_TOKENIZER_JSON.into()))
+            .model(RepoId(tokenizer_repo_id.into()))
+            .get_bytes(&FilePath(tokenizer_file.into()))
             .await?;
         log::info!(
             "tokenizer data loaded in {}ms",

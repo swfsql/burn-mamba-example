@@ -1,11 +1,11 @@
 pub mod hub;
 pub mod sampling;
-#[cfg(any(feature = "mamba1", feature = "mamba2"))]
+#[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 mod store_load;
 pub mod token_output_stream;
 pub mod tokenizer;
 
-#[cfg(any(feature = "mamba1", feature = "mamba2"))]
+#[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 pub use store_load::{Checkpoint, load_mamba};
 
 #[allow(unused_imports)]
@@ -26,12 +26,30 @@ pub const PRECISION_FLOAT_D_TYPE: FloatDType = FloatDType::F32;
 pub const PRECISION_INT_D_TYPE: IntDType = IntDType::I32;
 
 pub mod hf {
+    /// The tokenizer of the Mamba-1 / Mamba-2 130m checkpoints.
     pub mod tokenizer {
         #[allow(unused_imports)]
         use crate::hub::{FilePath, RepoId};
 
         /// A [RepoId].
         pub const REPO_ID: &str = "EleutherAI/gpt-neox-20b";
+        /// A [FilePath].
+        pub const FILE_PATH_TOKENIZER_JSON: &str = "tokenizer.json";
+    }
+
+    /// The tokenizer of the Mamba-3 187m checkpoints (`vocab_size: 128256`).
+    ///
+    /// Their model cards name `meta-llama/Llama-3.1-8B`, whose repo is gated —
+    /// the hub client sends no credentials, and the deployed wasm page has none
+    /// to send. This is an ungated mirror carrying the same `tokenizer.json`
+    /// pipeline and the same 128256 ids.
+    #[cfg(feature = "mamba3")]
+    pub mod tokenizer_llama31 {
+        #[allow(unused_imports)]
+        use crate::hub::{FilePath, RepoId};
+
+        /// A [RepoId].
+        pub const REPO_ID: &str = "unsloth/Meta-Llama-3.1-8B";
         /// A [FilePath].
         pub const FILE_PATH_TOKENIZER_JSON: &str = "tokenizer.json";
     }
@@ -54,6 +72,12 @@ pub mod hf {
         /// A [FilePath].
         pub const FILE_PATH_MODEL_SAFETENSORS: &str = "model.safetensors";
 
+        /// Where this checkpoint's `tokenizer.json` comes from.
+        pub use super::tokenizer as tokenizer_source;
+
+        /// Shown on the browser UI's asset card.
+        pub const DISPLAY_NAME: &str = "Mamba-130m";
+
         pub const VOCAB_SIZE: usize = 50277;
         pub const PAD_VOCAB_SIZE_MULTIPLE: usize = 8;
         pub const N_LAYER: usize = 24;
@@ -69,6 +93,8 @@ pub mod hf {
                 ignore_first_residual: false,
                 ignore_last_residual: false,
                 residuals: ResidualsConfig::Standard,
+                // The 130m checkpoints are mixer-only (`d_intermediate: 0`).
+                mlp: None,
                 mamba_block: mamba1::prelude::Mamba1Config::new(
                     D_MODEL, // 768
                 )
@@ -99,6 +125,12 @@ pub mod hf {
         /// A [FilePath].
         pub const FILE_PATH_MODEL_SAFETENSORS: &str = "model.safetensors";
 
+        /// Where this checkpoint's `tokenizer.json` comes from.
+        pub use super::tokenizer as tokenizer_source;
+
+        /// Shown on the browser UI's asset card.
+        pub const DISPLAY_NAME: &str = "Mamba2-130m";
+
         pub const VOCAB_SIZE: usize = 50277;
         pub const PAD_VOCAB_SIZE_MULTIPLE: usize = 16;
         pub const N_LAYER: usize = 24;
@@ -114,6 +146,8 @@ pub mod hf {
                 ignore_first_residual: false,
                 ignore_last_residual: false,
                 residuals: ResidualsConfig::Standard,
+                // The 130m checkpoints are mixer-only (`d_intermediate: 0`).
+                mlp: None,
                 mamba_block: mamba2::prelude::Mamba2Config::new(
                     D_MODEL, // 768
                 )
@@ -128,9 +162,125 @@ pub mod hf {
             }
         }
     }
+
+    /// Shared shape of the two official Mamba-3 187m checkpoints.
+    ///
+    /// Both are 12 layers of `Mamba3` mixer + SwiGLU MLP over the Llama-3.1
+    /// vocabulary, and differ only in `mimo_rank`, `d_intermediate` and the
+    /// checkpoint's `chunk_size`. The fields below mirror their `config.json`;
+    /// `is_outproj_norm: false` and `attn_layer_idx: []` in both, so there is no
+    /// `out_norm` and no attention layer to model.
+    #[cfg(feature = "mamba3")]
+    macro_rules! mamba3_187m {
+        (
+            $module:ident,
+            repo = $repo:literal,
+            display_name = $display_name:literal,
+            d_intermediate = $d_intermediate:expr,
+            mimo_rank = $mimo_rank:expr,
+            chunk_size = $chunk_size:expr,
+        ) => {
+            pub mod $module {
+                #[allow(unused_imports)]
+                use crate::hub::{FilePath, RepoId, RevisionPath};
+                use burn_mamba::mamba3;
+                use burn_mamba::modules::GatedMlpConfig;
+                use burn_mamba::prelude::*;
+
+                /// A [RepoId].
+                pub const REPO_ID: &str = $repo;
+                /// A [RevisionPath].
+                ///
+                /// Safetensor PR conversion made by a bot — `main` carries only
+                /// `pytorch_model.bin`, which `burn-store` cannot read.
+                pub const REVISION_PATH: &str = "refs/pr/1";
+                /// A [FilePath].
+                pub const FILE_PATH_CONFIG_JSON: &str = "config.json";
+                /// A [FilePath].
+                pub const FILE_PATH_MODEL_SAFETENSORS: &str = "model.safetensors";
+
+                /// Where this checkpoint's `tokenizer.json` comes from.
+                pub use super::tokenizer_llama31 as tokenizer_source;
+
+                /// Shown on the browser UI's asset card.
+                pub const DISPLAY_NAME: &str = $display_name;
+
+                pub const VOCAB_SIZE: usize = 128256;
+                pub const PAD_VOCAB_SIZE_MULTIPLE: usize = 16;
+                pub const N_LAYER: usize = 12;
+                pub const D_MODEL: usize = 768;
+                pub const D_INTERMEDIATE: usize = $d_intermediate;
+                pub const MIMO_RANK: usize = $mimo_rank;
+                /// The SSD chunk length the checkpoint was trained with.
+                pub const CHUNK_SIZE: usize = $chunk_size;
+
+                /// The per-layer SwiGLU feed-forward. Note `GatedMlpConfig`
+                /// rounds `d_intermediate` up to a multiple of 128, which is why
+                /// the MIMO checkpoint's `fc1` is `[2·1280, 768]` while its
+                /// `config.json` says `1264`.
+                pub fn mlp() -> GatedMlpConfig {
+                    GatedMlpConfig::new(D_MODEL, D_INTERMEDIATE)
+                }
+
+                pub fn config() -> MambaVocabNetConfig {
+                    MambaVocabNetConfig::Mamba3 {
+                        n_real_layers: N_LAYER, // 12
+                        n_virtual_layers: None,
+                        vocab_size: VOCAB_SIZE, // 128256
+                        pad_vocab_size_multiple: PAD_VOCAB_SIZE_MULTIPLE, // 16
+                        missing_lm_head: true, // tie_embeddings: true
+                        ignore_first_residual: false,
+                        ignore_last_residual: false,
+                        residuals: ResidualsConfig::Standard,
+                        mlp: Some(mlp()),
+                        mamba_block: mamba3::prelude::Mamba3Config::new(
+                            D_MODEL, // 768
+                        )
+                        .with_state_rank(128) // default
+                        .with_expand(2) // default
+                        .with_per_head_dim(64) // default; n_heads = 768*2/64 = 24
+                        .with_ngroups(1) // default
+                        .with_mimo_rank(MIMO_RANK)
+                        .with_rope_fraction(0.5) // default
+                        .with_a_floor(1e-4) // default
+                        .with_dt_min(1e-3) // default
+                        .with_dt_max(0.1) // default
+                        .with_dt_init_floor(1e-4) // default
+                        .with_has_outproj_norm(false) // is_outproj_norm: false
+                        .with_has_proj_bias(false) // default
+                        // Identical values and grads either way; `false` suits
+                        // the CPU backends this demo decodes on (flex natively,
+                        // and in the browser), where the specialised per-token
+                        // kernel is markedly slower than the plain matmul.
+                        .with_siso_specialization_decode(false),
+                    }
+                }
+            }
+        };
+    }
+
+    #[cfg(feature = "mamba3")]
+    mamba3_187m!(
+        mamba3_siso_187m,
+        repo = "state-spaces/mamba3-siso-187m",
+        display_name = "Mamba3-SISO-187m",
+        d_intermediate = 1536,
+        mimo_rank = 1,
+        chunk_size = 64,
+    );
+
+    #[cfg(feature = "mamba3")]
+    mamba3_187m!(
+        mamba3_mimo_187m,
+        repo = "state-spaces/mamba3-mimo-187m",
+        display_name = "Mamba3-MIMO-187m",
+        d_intermediate = 1264,
+        mimo_rank = 4,
+        chunk_size = 16,
+    );
 }
 
-#[cfg(any(feature = "mamba1", feature = "mamba2"))]
+#[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 pub struct MambaWrapper {
     pub tokenizer: TokenOutputStream,
     pub mamba: MambaVocabNet,
@@ -143,7 +293,7 @@ pub struct LogitsProcessorWrapper {
     repeat_last_n: usize,
 }
 
-#[cfg(any(feature = "mamba1", feature = "mamba2"))]
+#[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 impl MambaWrapper
 {
     pub fn new(tokenizer: Tokenizer, mamba: MambaVocabNet, mamba_config: MambaVocabNetConfig) -> Self {
@@ -154,15 +304,23 @@ impl MambaWrapper
         }
     }
 
+    /// The end-of-sequence token names of the supported tokenizers, tried in
+    /// order. `EleutherAI/gpt-neox-20b` spells it `<|endoftext|>` and
+    /// `meta-llama/Llama-3.1-8B` spells it `<|end_of_text|>`; neither vocabulary
+    /// contains the other's name, so probing is unambiguous.
+    const EOS_TOKENS: [&str; 2] = ["<|endoftext|>", "<|end_of_text|>"];
+
     /// Clears the [Tokenizer] and returns the `prompt` as a list of Vocab tokens
     /// and also the eos token.
     pub fn reset_prompt(&mut self, prompt: &str) -> anyhow::Result<(Vec<usize>, usize)> {
         self.tokenizer.clear();
         let tokens = self.tokenizer.tokenizer().encode(prompt);
-        let eos_token = match self.tokenizer.get_token("<|endoftext|>") {
-            Some(token) => token,
-            None => anyhow::bail!("cannot find the </s> token"),
-        };
+        let eos_token = Self::EOS_TOKENS
+            .iter()
+            .find_map(|name| self.tokenizer.get_token(name))
+            .ok_or_else(|| {
+                anyhow::anyhow!("cannot find an eos token among {:?}", Self::EOS_TOKENS)
+            })?;
         Ok((
             tokens.into_iter().map(|e| e as usize).collect(),
             eos_token as usize,
@@ -374,17 +532,19 @@ impl LogitsProcessorWrapper {
     }
 }
 
-#[cfg(any(feature = "mamba1", feature = "mamba2"))]
+#[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 pub fn device(model: &MambaVocabNet) -> Device {
     match model {
         #[cfg(feature = "mamba1")]
         MambaVocabNet::Mamba1(m) => m.embedding.weight.device(),
         #[cfg(feature = "mamba2")]
         MambaVocabNet::Mamba2(m) => m.embedding.weight.device(),
+        #[cfg(feature = "mamba3")]
+        MambaVocabNet::Mamba3(m) => m.embedding.weight.device(),
     }
 }
 
-#[cfg(any(feature = "mamba1", feature = "mamba2"))]
+#[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 #[allow(irrefutable_let_patterns)]
 pub fn padded_vocab_size(config: &MambaVocabNetConfig) -> usize {
     let (vocab_size, pad_vocab_size_multiple) =
@@ -397,6 +557,10 @@ pub fn padded_vocab_size(config: &MambaVocabNetConfig) -> usize {
         MambaVocabNetConfig::Mamba2{vocab_size, pad_vocab_size_multiple, ..} => {
             (vocab_size, pad_vocab_size_multiple)
         }
+        #[cfg(feature = "mamba3")]
+        MambaVocabNetConfig::Mamba3{vocab_size, pad_vocab_size_multiple, ..} => {
+            (vocab_size, pad_vocab_size_multiple)
+        }
     };
 
     if vocab_size % pad_vocab_size_multiple == 0 {
@@ -406,7 +570,7 @@ pub fn padded_vocab_size(config: &MambaVocabNetConfig) -> usize {
     }
 }
 
-#[cfg(any(feature = "mamba1", feature = "mamba2"))]
+#[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 pub fn empty_caches(batch: usize, mamba_config: &MambaVocabNetConfig, device: &Device) -> MambaCaches {
     match mamba_config {
         #[cfg(feature = "mamba1")]
@@ -422,15 +586,40 @@ pub fn empty_caches(batch: usize, mamba_config: &MambaVocabNetConfig, device: &D
                 .init(device);
             MambaCaches::Mamba2(caches)
         }
+        #[cfg(feature = "mamba3")]
+        MambaVocabNetConfig::Mamba3 {n_real_layers, mamba_block, ..} => {
+            // Mamba-3 caches are pathway-tagged, and the supplied cache is what
+            // selects the pathway. Single-SSD is the one a missing cache would
+            // have defaulted to, and the one `step` decodes through.
+            use burn_mamba::mamba3::single_ssd::prelude::Mamba3SingleSsdCachesConfig;
+            let caches = Mamba3SingleSsdCachesConfig::new_from_block_config(
+                *n_real_layers,
+                batch,
+                mamba_block.clone(),
+            )
+            .init(device);
+            MambaCaches::Mamba3(Mamba3Caches::SingleSsd(caches))
+        }
     }
 }
 
-#[cfg(any(feature = "mamba1", feature = "mamba2"))]
+#[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 pub fn ssd_path(mamba_config: &MambaVocabNetConfig) -> MambaSsdPath {
     match mamba_config {
         #[cfg(feature = "mamba1")]
         MambaVocabNetConfig::Mamba1 {..} => MambaSsdPath::Mamba1,
         #[cfg(feature = "mamba2")]
         MambaVocabNetConfig::Mamba2 {..} => MambaSsdPath::Mamba2(Mamba2SsdPath::SerialRecalculated(None)),
+        // The chunk length the checkpoint was trained with; the two Mamba-3
+        // checkpoints disagree (64 for SISO, 16 for MIMO), so it is read from the
+        // per-model constant rather than left to the path's own default.
+        #[cfg(feature = "mamba3-siso")]
+        MambaVocabNetConfig::Mamba3 {..} => MambaSsdPath::Mamba3(Mamba3SsdPath::SerialRecalculated(
+            Some(hf::mamba3_siso_187m::CHUNK_SIZE),
+        )),
+        #[cfg(all(feature = "mamba3", not(feature = "mamba3-siso")))]
+        MambaVocabNetConfig::Mamba3 {..} => MambaSsdPath::Mamba3(Mamba3SsdPath::SerialRecalculated(
+            Some(hf::mamba3_mimo_187m::CHUNK_SIZE),
+        )),
     }
 }

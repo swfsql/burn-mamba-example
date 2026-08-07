@@ -17,6 +17,10 @@ pub fn main() -> anyhow::Result<()> {
     let mut models = models_mamba1()?;
     #[cfg(feature = "mamba2")]
     let mut models = models_mamba2()?;
+    #[cfg(feature = "mamba3-siso")]
+    let mut models = models_mamba3_siso()?;
+    #[cfg(feature = "mamba3-mimo")]
+    let mut models = models_mamba3_mimo()?;
 
     info!("running in sequential mode (inference-friendly)");
     let sample_len = 80;
@@ -54,6 +58,8 @@ fn models_mamba1() -> anyhow::Result<MambaWrapper> {
         hf::mamba1_130m::REPO_ID,
         hf::mamba1_130m::REVISION_PATH,
         hf::mamba1_130m::FILE_PATH_MODEL_SAFETENSORS,
+        hf::mamba1_130m::tokenizer_source::REPO_ID,
+        hf::mamba1_130m::tokenizer_source::FILE_PATH_TOKENIZER_JSON,
         hf::mamba1_130m::config(),
     )
 }
@@ -64,7 +70,33 @@ fn models_mamba2() -> anyhow::Result<MambaWrapper> {
         hf::mamba2_130m::REPO_ID,
         hf::mamba2_130m::REVISION_PATH,
         hf::mamba2_130m::FILE_PATH_MODEL_SAFETENSORS,
+        hf::mamba2_130m::tokenizer_source::REPO_ID,
+        hf::mamba2_130m::tokenizer_source::FILE_PATH_TOKENIZER_JSON,
         hf::mamba2_130m::config(),
+    )
+}
+
+#[cfg(feature = "mamba3-siso")]
+fn models_mamba3_siso() -> anyhow::Result<MambaWrapper> {
+    models(
+        hf::mamba3_siso_187m::REPO_ID,
+        hf::mamba3_siso_187m::REVISION_PATH,
+        hf::mamba3_siso_187m::FILE_PATH_MODEL_SAFETENSORS,
+        hf::mamba3_siso_187m::tokenizer_source::REPO_ID,
+        hf::mamba3_siso_187m::tokenizer_source::FILE_PATH_TOKENIZER_JSON,
+        hf::mamba3_siso_187m::config(),
+    )
+}
+
+#[cfg(feature = "mamba3-mimo")]
+fn models_mamba3_mimo() -> anyhow::Result<MambaWrapper> {
+    models(
+        hf::mamba3_mimo_187m::REPO_ID,
+        hf::mamba3_mimo_187m::REVISION_PATH,
+        hf::mamba3_mimo_187m::FILE_PATH_MODEL_SAFETENSORS,
+        hf::mamba3_mimo_187m::tokenizer_source::REPO_ID,
+        hf::mamba3_mimo_187m::tokenizer_source::FILE_PATH_TOKENIZER_JSON,
+        hf::mamba3_mimo_187m::config(),
     )
 }
 
@@ -73,18 +105,17 @@ fn models(
     repo_id: &str,
     revision_path: &str,
     model_file: &str,
+    tokenizer_repo_id: &str,
+    tokenizer_file: &str,
     mamba_config: burn_mamba::prelude::MambaVocabNetConfig,
 ) -> anyhow::Result<MambaWrapper> {
     let start = std::time::Instant::now();
 
     let api = Api::new()?;
     let tokenizer_filename = api
-        .model(RepoId(hf::tokenizer::REPO_ID.into()))
-        .get(&FilePath(hf::tokenizer::FILE_PATH_TOKENIZER_JSON.into()))?;
-    info!(
-        "tokenizer {} path: {tokenizer_filename:?}",
-        hf::tokenizer::FILE_PATH_TOKENIZER_JSON
-    );
+        .model(RepoId(tokenizer_repo_id.into()))
+        .get(&FilePath(tokenizer_file.into()))?;
+    info!("tokenizer {tokenizer_file} path: {tokenizer_filename:?}");
 
     let repo = api.repo(Repo::with_revision(
         RepoId(repo_id.into()),

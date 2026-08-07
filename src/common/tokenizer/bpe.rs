@@ -1,8 +1,9 @@
 //! Byte-pair encoding over the byte-level alphabet.
 //!
-//! Matches `tokenizers`' `models::bpe::BPE` for the configuration used by
-//! `EleutherAI/gpt-neox-20b`: no dropout, no unknown token, no continuing-subword
-//! prefix, no end-of-word suffix.
+//! Matches `tokenizers`' `models::bpe::BPE` for the configurations used by
+//! `EleutherAI/gpt-neox-20b` and `meta-llama/Llama-3.1-8B`: no dropout, no
+//! unknown token, no continuing-subword prefix, no end-of-word suffix, and the
+//! optional `ignore_merges` short-circuit that Llama-3 sets.
 
 use std::collections::HashMap;
 
@@ -17,6 +18,9 @@ struct Merge {
 #[derive(Debug, Default)]
 pub struct Bpe {
     merges: HashMap<(u32, u32), Merge>,
+    /// `model.ignore_merges`: emit a whole pre-tokenized word that is itself a
+    /// vocabulary entry as that single id, without consulting the merge table.
+    ignore_merges: bool,
 }
 
 impl Bpe {
@@ -26,6 +30,7 @@ impl Bpe {
     pub fn new<'a>(
         merges: impl IntoIterator<Item = (&'a str, &'a str)>,
         vocab: &HashMap<String, u32>,
+        ignore_merges: bool,
     ) -> Self {
         let mut table = HashMap::new();
         for (rank, (left, right)) in merges.into_iter().enumerate() {
@@ -41,7 +46,10 @@ impl Bpe {
                 new_id: *new_id,
             });
         }
-        Self { merges: table }
+        Self {
+            merges: table,
+            ignore_merges,
+        }
     }
 
     /// Tokenizes one pre-tokenized word (already in the byte-level alphabet).
@@ -49,7 +57,16 @@ impl Bpe {
     /// Repeatedly applies the lowest-ranked applicable merge, breaking ties towards
     /// the left-most pair — the same order `tokenizers`' merge heap produces.
     /// Characters absent from `vocab` are dropped (there is no unknown token).
+    ///
+    /// Under `ignore_merges` a word present in the vocabulary is emitted as-is
+    /// first. This is not an optimisation: for Llama-3 the merge table can reach
+    /// a *different* segmentation of a word that also exists whole, so skipping
+    /// the check changes ids.
     pub fn tokenize(&self, word: &str, vocab: &HashMap<String, u32>) -> Vec<u32> {
+        if self.ignore_merges && let Some(id) = vocab.get(word) {
+            return vec![*id];
+        }
+
         let mut symbols: Vec<u32> = Vec::with_capacity(word.len());
         let mut buf = [0u8; 4];
         for c in word.chars() {
@@ -82,14 +99,18 @@ impl Bpe {
 mod tests {
     use super::*;
 
-    fn toy() -> (HashMap<String, u32>, Bpe) {
-        let vocab: HashMap<String, u32> = ["a", "b", "c", "ab", "bc", "abc"]
+    fn toy_vocab() -> HashMap<String, u32> {
+        ["a", "b", "c", "ab", "bc", "abc"]
             .into_iter()
             .enumerate()
             .map(|(i, s)| (s.to_string(), i as u32))
-            .collect();
+            .collect()
+    }
+
+    fn toy() -> (HashMap<String, u32>, Bpe) {
+        let vocab = toy_vocab();
         // "b c" outranks "a b", so "abc" must merge right-to-left first.
-        let bpe = Bpe::new([("b", "c"), ("a", "b"), ("a", "bc")], &vocab);
+        let bpe = Bpe::new([("b", "c"), ("a", "b"), ("a", "bc")], &vocab, false);
         (vocab, bpe)
     }
 
@@ -106,5 +127,23 @@ mod tests {
     fn unknown_chars_are_dropped() {
         let (vocab, bpe) = toy();
         assert_eq!(bpe.tokenize("azb", &vocab), vec![vocab["ab"]]);
+    }
+
+    /// `ignore_merges` must take the whole-word id even when the merge table
+    /// would have segmented the word differently — the two disagree here, which
+    /// is exactly why the flag is not a mere fast path.
+    #[test]
+    fn ignore_merges_prefers_the_whole_word() {
+        let vocab = toy_vocab();
+        // Only "a"+"b" is reachable by merging, so without the flag "abc"
+        // segments as ["ab", "c"]; the whole word "abc" is in the vocab though.
+        let merges = [("a", "b")];
+        let plain = Bpe::new(merges, &vocab, false);
+        assert_eq!(plain.tokenize("abc", &vocab), vec![vocab["ab"], vocab["c"]]);
+
+        let ignoring = Bpe::new(merges, &vocab, true);
+        assert_eq!(ignoring.tokenize("abc", &vocab), vec![vocab["abc"]]);
+        // Words absent from the vocabulary still go through the merge table.
+        assert_eq!(ignoring.tokenize("ab", &vocab), vec![vocab["ab"]]);
     }
 }

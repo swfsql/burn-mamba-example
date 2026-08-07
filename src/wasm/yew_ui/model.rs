@@ -4,9 +4,23 @@ use crate::hub::{
     UrlTemplate,
 };
 use crate::tokenizer::Tokenizer;
-use crate::{Checkpoint, LogitsProcessorWrapper, MambaWrapper, hf, load_mamba};
+use crate::{Checkpoint, LogitsProcessorWrapper, MambaWrapper, load_mamba};
 use burn::prelude::*;
 use burn_mamba::prelude::*;
+
+/// The single checkpoint this bundle was built for.
+///
+/// A wasm build enables exactly one model feature, so this alias resolves once
+/// and every repo id / config / display name below reads through it. Enabling
+/// two collides on the name, which is the intended compile error.
+#[cfg(feature = "mamba1")]
+use crate::hf::mamba1_130m as active;
+#[cfg(feature = "mamba2")]
+use crate::hf::mamba2_130m as active;
+#[cfg(feature = "mamba3-mimo")]
+use crate::hf::mamba3_mimo_187m as active;
+#[cfg(feature = "mamba3-siso")]
+use crate::hf::mamba3_siso_187m as active;
 
 pub struct Model {
     // general data
@@ -81,34 +95,23 @@ impl Default for Model {
                 ModelDataConfig::Huggingface(HuggingfaceConfig {
                     endpoint: Endpoint::default(),
                     url_template: UrlTemplate::default(),
-                    repo_id: RepoId(hf::tokenizer::REPO_ID.into()),
+                    repo_id: RepoId(active::tokenizer_source::REPO_ID.into()),
                     repo_type: RepoType::Model,
                     revision: RevisionPath::default(),
-                    filepath: FilePath(hf::tokenizer::FILE_PATH_TOKENIZER_JSON.into()),
+                    filepath: FilePath(
+                        active::tokenizer_source::FILE_PATH_TOKENIZER_JSON.into(),
+                    ),
                 }),
             ),
-            #[cfg(feature = "mamba1")]
             mamba: ModelData::new(
-                "Mamba-130m".into(),
+                active::DISPLAY_NAME.into(),
                 ModelDataConfig::Huggingface(HuggingfaceConfig {
                     endpoint: Endpoint::default(),
                     url_template: UrlTemplate::default(),
-                    repo_id: RepoId(hf::mamba1_130m::REPO_ID.into()),
+                    repo_id: RepoId(active::REPO_ID.into()),
                     repo_type: RepoType::Model,
-                    revision: RevisionPath(hf::mamba1_130m::REVISION_PATH.into()),
-                    filepath: FilePath(hf::mamba1_130m::FILE_PATH_MODEL_SAFETENSORS.into()),
-                }),
-            ),
-            #[cfg(feature = "mamba2")]
-            mamba: ModelData::new(
-                "Mamba2-130m".into(),
-                ModelDataConfig::Huggingface(HuggingfaceConfig {
-                    endpoint: Endpoint::default(),
-                    url_template: UrlTemplate::default(),
-                    repo_id: RepoId(hf::mamba2_130m::REPO_ID.into()),
-                    repo_type: RepoType::Model,
-                    revision: RevisionPath(hf::mamba2_130m::REVISION_PATH.into()),
-                    filepath: FilePath(hf::mamba2_130m::FILE_PATH_MODEL_SAFETENSORS.into()),
+                    revision: RevisionPath(active::REVISION_PATH.into()),
+                    filepath: FilePath(active::FILE_PATH_MODEL_SAFETENSORS.into()),
                 }),
             ),
             models_wrapper_builder: MambaWrapperBuilder::default(),
@@ -141,10 +144,7 @@ impl Default for MambaWrapperBuilder {
         MambaWrapperBuilder {
             tokenizer: None,
             mamba: None,
-            #[cfg(feature = "mamba1")]
-            mamba_config: Some(hf::mamba1_130m::config()),
-            #[cfg(feature = "mamba2")]
-            mamba_config: Some(hf::mamba2_130m::config()),
+            mamba_config: Some(active::config()),
         }
     }
 }

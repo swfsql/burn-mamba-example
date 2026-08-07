@@ -45,23 +45,27 @@ jobs:
             - name: Build Release wasm for Mamba2
               run: wasm-pack build --release --target web --out-dir "frontend/mamba2/pkg" --no-opt --no-default-features --features "backend-flex,backend-simd,yew,mamba2"
 
+            - name: Build Release wasm for Mamba3 SISO
+              run: wasm-pack build --release --target web --out-dir "frontend/mamba3-siso/pkg" --no-opt --no-default-features --features "backend-flex,backend-simd,yew,mamba3-siso"
+
+            - name: Build Release wasm for Mamba3 MIMO
+              run: wasm-pack build --release --target web --out-dir "frontend/mamba3-mimo/pkg" --no-opt --no-default-features --features "backend-flex,backend-simd,yew,mamba3-mimo"
+
             - name: Prepare Wasm Deploy
               run: |
                   set -e
-                  # Prepare the publishing structure
-                  mkdir -p publish/{mamba1,mamba2}
+                  for model in mamba1 mamba2 mamba3-siso mamba3-mimo; do
+                      # Prepare the publishing structure
+                      mkdir -p "publish/$model"
 
-                  # move assets
-                  mv frontend/mamba1/index.html publish/mamba1/
-                  mv frontend/mamba2/index.html publish/mamba2/
-                  mv frontend/mamba1/index.js publish/mamba1/
-                  mv frontend/mamba2/index.js publish/mamba2/
-                  mv frontend/mamba1/pkg/ publish/mamba1/pkg/
-                  mv frontend/mamba2/pkg/ publish/mamba2/pkg/
+                      # move assets
+                      mv "frontend/$model/index.html" "publish/$model/"
+                      mv "frontend/$model/index.js" "publish/$model/"
+                      mv "frontend/$model/pkg/" "publish/$model/pkg/"
 
-                  # rm gitignore
-                  rm publish/mamba1/pkg/.gitignore
-                  rm publish/mamba2/pkg/.gitignore
+                      # rm gitignore
+                      rm "publish/$model/pkg/.gitignore"
+                  done
 
             # Publish
             - name: Frontend Deploy

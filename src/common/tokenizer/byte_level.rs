@@ -1,9 +1,17 @@
-//! The GPT-2 "byte level" boundary: the reversible byte↔char alphabet and the
-//! word-splitting regex, reimplemented as a hand-rolled scanner.
+//! The "byte level" boundary: the reversible byte↔char alphabet shared by every
+//! GPT-2-descended BPE, plus the two word-splitting regexes this crate supports,
+//! reimplemented as hand-rolled scanners.
 //!
-//! Equivalent to `tokenizers`' `pre_tokenizers::byte_level::ByteLevel` with
-//! `add_prefix_space: false`, `use_regex: true` (which is what
-//! `EleutherAI/gpt-neox-20b`'s `tokenizer.json` asks for).
+//! [`split_words`] is `tokenizers`' `pre_tokenizers::byte_level::ByteLevel` with
+//! `add_prefix_space: false`, `use_regex: true` — what `EleutherAI/gpt-neox-20b`
+//! asks for. [`split_words_llama3`] is the `Split` pre-tokenizer of
+//! `meta-llama/Llama-3.1-8B`, whose `ByteLevel` stage then does the byte mapping
+//! only (`use_regex: false`).
+//!
+//! Both are ordered alternations that between them match every character, so a
+//! left-to-right "first alternative that matches wins" scan reproduces the
+//! regex crate's `find_iter` exactly — including the `?`/`*` backtracking, which
+//! is spelled out by hand where it bites.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -172,6 +180,148 @@ pub fn split_words(text: &str) -> Vec<&str> {
     out
 }
 
+/// The longest run of leading characters satisfying `pred`, in bytes.
+fn run_len(s: &str, pred: impl Fn(char) -> bool) -> usize {
+    let mut end = 0;
+    for (i, c) in s.char_indices() {
+        if pred(c) {
+            end = i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    end
+}
+
+fn is_letter(c: char) -> bool {
+    c.is_alphabetic()
+}
+fn is_number(c: char) -> bool {
+    c.is_numeric()
+}
+/// `[^\s\p{L}\p{N}]` — punctuation and symbols.
+fn is_punct(c: char) -> bool {
+    !c.is_whitespace() && !is_letter(c) && !is_number(c)
+}
+fn is_newline(c: char) -> bool {
+    c == '\r' || c == '\n'
+}
+
+/// Splits `text` the way the Llama-3 pre-tokenizer regex does:
+///
+/// ```text
+/// (?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}
+///   | ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+
+/// ```
+///
+/// The differences from [`split_words`] that actually change token ids: the
+/// contractions are **case-insensitive**, a word may absorb any single leading
+/// non-letter (not just a space), digits are cut into groups of **at most
+/// three**, and a whitespace run ending in a newline is emitted whole rather
+/// than one-character-at-a-time.
+///
+/// Character-class caveats are the same as [`split_words`]' (`\p{L}` via
+/// [char::is_alphabetic], `\p{N}` via [char::is_numeric]).
+pub fn split_words_llama3(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < text.len() {
+        let rest = &text[start..];
+        let end = llama3_match(rest);
+        debug_assert!(end > 0, "every char is covered by some alternative");
+        out.push(&rest[..end]);
+        start += end;
+    }
+    out
+}
+
+/// Byte length of the first Llama-3 alternative matching at the head of `rest`.
+fn llama3_match(rest: &str) -> usize {
+    // Listed in regex order: earlier alternatives win outright.
+    const CONTRACTIONS: [&str; 7] = ["'s", "'t", "'re", "'ve", "'m", "'ll", "'d"];
+
+    // (?i:'s|'t|'re|'ve|'m|'ll|'d)
+    if rest.starts_with('\'') {
+        for c in CONTRACTIONS {
+            if rest.get(..c.len()).is_some_and(|h| h.eq_ignore_ascii_case(c)) {
+                return c.len();
+            }
+        }
+    }
+
+    let mut chars = rest.char_indices();
+    let (_, c0) = chars.next().expect("non-empty remainder");
+    let c1 = chars.next().map(|(_, c)| c);
+
+    // [^\r\n\p{L}\p{N}]?\p{L}+ — the optional head is greedy but backtracks when
+    // no letter follows it, so the no-head form has to be tried separately.
+    if !is_newline(c0) && !is_letter(c0) && !is_number(c0) && c1.is_some_and(is_letter) {
+        let off = c0.len_utf8();
+        return off + run_len(&rest[off..], is_letter);
+    }
+    if is_letter(c0) {
+        return run_len(rest, is_letter);
+    }
+
+    // \p{N}{1,3}
+    if is_number(c0) {
+        let mut len = 0;
+        for (n, (i, c)) in rest.char_indices().enumerate() {
+            if n == 3 || !is_number(c) {
+                break;
+            }
+            len = i + c.len_utf8();
+        }
+        return len;
+    }
+
+    // ` ?[^\s\p{L}\p{N}]+[\r\n]*` — same backtracking shape as above.
+    if c0 == ' ' && c1.is_some_and(is_punct) {
+        let punct = run_len(&rest[1..], is_punct);
+        return 1 + punct + run_len(&rest[1 + punct..], is_newline);
+    }
+    if is_punct(c0) {
+        let punct = run_len(rest, is_punct);
+        return punct + run_len(&rest[punct..], is_newline);
+    }
+
+    // Only whitespace can reach here.
+    let ws = run_len(rest, is_whitespace_char);
+
+    // `\s*[\r\n]+` — `\s*` backtracks until `[\r\n]+` can match, so this ends at
+    // the run's **last** newline (e.g. "  \n  x" yields "  \n", not "  \n  ").
+    let mut last_newline_end = 0;
+    for (i, c) in rest[..ws].char_indices() {
+        if is_newline(c) {
+            last_newline_end = i + c.len_utf8();
+        }
+    }
+    if last_newline_end > 0 {
+        return last_newline_end;
+    }
+
+    // `\s+(?!\S)` then `\s+`: hand the final character back when a non-space
+    // follows, unless the run is a single character (there `\s+` cannot give up
+    // its only char, so the lookahead alternative fails and the bare `\s+` wins).
+    if ws < rest.len() {
+        let mut prev_end = 0;
+        for (i, c) in rest[..ws].char_indices() {
+            if i + c.len_utf8() == ws {
+                break;
+            }
+            prev_end = i + c.len_utf8();
+        }
+        if prev_end > 0 {
+            return prev_end;
+        }
+    }
+    ws
+}
+
+fn is_whitespace_char(c: char) -> bool {
+    c.is_whitespace()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +356,55 @@ mod tests {
     fn byte_round_trip() {
         let s = "héllo — ok";
         assert_eq!(decode_bytes([encode_bytes(s).as_str()]), s);
+    }
+
+    /// Every expectation here was produced by the reference implementation —
+    /// `tokenizers` 0.22.1 driving `meta-llama/Llama-3.1-8B`'s `tokenizer.json`
+    /// via `pre_tokenizer.pre_tokenize_str` — and then byte-level-decoded back to
+    /// plain text. They are not hand-derived from reading the regex.
+    #[test]
+    fn splits_like_the_llama3_regex() {
+        #[rustfmt::skip]
+        let cases: &[(&str, &[&str])] = &[
+            ("Mamba is the",      &["Mamba", " is", " the"]),
+            ("Hello, world!",     &["Hello", ",", " world", "!"]),
+            ("a  b",              &["a", " ", " b"]),
+            ("a  ",               &["a", "  "]),
+            ("  ",                &["  "]),
+            // Contractions are case-insensitive here, unlike GPT-2's.
+            ("don't stop",        &["don", "'t", " stop"]),
+            ("DON'T STOP",        &["DON", "'T", " STOP"]),
+            ("It'S a Test'RE",    &["It", "'S", " a", " Test", "'RE"]),
+            // Digits come in groups of at most three, and a space before a digit
+            // is left on its own (the ` ?…` head only precedes letters/punct).
+            ("x1 22",             &["x", "1", " ", "22"]),
+            ("1234567",           &["123", "456", "7"]),
+            ("The year 2024 was", &["The", " year", " ", "202", "4", " was"]),
+            // A whitespace run ending in a newline is emitted whole...
+            ("\n\nhi",            &["\n\n", "hi"]),
+            ("a\n\n\nb",          &["a", "\n\n\n", "b"]),
+            ("foo\r\nbar",        &["foo", "\r\n", "bar"]),
+            // ...but only up to its *last* newline.
+            ("  \n  x",           &["  \n", " ", " x"]),
+            ("\t\tx",             &["\t", "\tx"]),
+            // Any single non-letter may head a word, not just a space.
+            ("(hello)",           &["(hello", ")"]),
+            ("héllo — ok",        &["héllo", " —", " ok"]),
+            ("",                  &[]),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(&split_words_llama3(input), expected, "input {input:?}");
+        }
+    }
+
+    /// The two splitters must stay distinct — a build that quietly routed the
+    /// Llama-3 tokenizer through the GPT-2 scanner would still produce plausible
+    /// ids, just wrong ones.
+    #[test]
+    fn the_two_splitters_disagree() {
+        assert_eq!(split_words("\n\nhi"), vec!["\n", "\n", "hi"]);
+        assert_eq!(split_words_llama3("\n\nhi"), vec!["\n\n", "hi"]);
+        assert_eq!(split_words("1234567"), vec!["1234567"]);
+        assert_eq!(split_words_llama3("1234567"), vec!["123", "456", "7"]);
     }
 }
