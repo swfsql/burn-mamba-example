@@ -18,7 +18,7 @@ browser — no inference server, no API key.
 | Mamba-3 SISO | 187m | [357MB (bf16)](https://huggingface.co/state-spaces/mamba3-siso-187m) | Llama-3.1, 17MB | [▶ mamba3-siso](https://swfsql.github.io/burn-mamba-example/mamba3-siso) |
 | Mamba-3 MIMO | 187m | [358MB (bf16)](https://huggingface.co/state-spaces/mamba3-mimo-187m) | Llama-3.1, 17MB | [▶ mamba3-mimo](https://swfsql.github.io/burn-mamba-example/mamba3-mimo) |
 
-Everything is materialised as **f32** at load time, so one code path serves all
+Weights are materialised as **f32** at load time, so one code path serves all
 three stored dtypes. The browser pages fetch on demand and cache into IndexedDB
 in 10MB chunks, so a download resumes across reloads and can be erased from the
 page.
@@ -28,15 +28,17 @@ page.
 - **Full client-side inference** — weights, tokenizer, sampling and generation all
   run in the browser via WASM.
 - **Four checkpoints, one codebase** — Mamba-1/2 130m and both Mamba-3 187m
-  topologies, differing only in data (`ModelSpec`), not in `#[cfg]` branches.
+  topologies. Which one runs is plain runtime data (a `ModelSpec` picked out of
+  `hf::MODELS`), so several can be compiled into one binary.
 - **Both execution modes** — a recurrent `step()` for decoding and a chunkwise
   `forward()` over the whole prompt; running both on one prompt is how this repo
   checks a backend (see [Verifying a backend](#verifying-a-backend)).
-- **Few dependencies** — the HuggingFace client, the `tokenizer.json` pipeline and
-  the sampler are all local modules; weight loading goes through `burn-store`.
-  No `candle`, no `tokenizers`, no `hf-hub`.
-- **Backend-agnostic** — pick the backend with a cargo feature; Burn's Dispatch
-  backend means no `<B>` generic anywhere in the source.
+- **Self-contained glue** — the HuggingFace client, the `tokenizer.json` pipeline
+  and the sampler are local modules under `src/common/`, and weight loading goes
+  through `burn-store`. Outside of `burn`/`burn-mamba`, the dependencies are an
+  HTTP client, `serde`, and the wasm/Yew bindings.
+- **Backend picked at runtime** — Burn's Dispatch backend makes the backend a
+  `Device` value, so a build can carry several and `BURN_DEVICE` chooses one.
 
 ## Quick start
 
@@ -120,9 +122,39 @@ cargo check --no-default-features --features "native,backend-flex,backend-simd,$
 cargo run --release --no-default-features --features "native,backend-flex,backend-simd,$MAMBA"
 ```
 
-Weights and tokenizer are cached under `$HF_HOME/hub` (default
-`~/.cache/huggingface/hub`) in exactly the layout the HuggingFace tools use, so an
-already-populated cache is reused and nothing is re-downloaded.
+The tokenizer and the weights are downloaded on first run and stored in
+`${HF_CACHE}/models--{org}--{name}/`. The files are the following:
+
+| Cache directory | File | Size |
+|---|---|---|
+| `models--state-spaces--mamba-130m/` | model.safetensors | 493 MB |
+| `models--state-spaces--mamba2-130m/` | model.safetensors | 247 MB |
+| `models--state-spaces--mamba3-siso-187m/` | model.safetensors | 357 MB |
+| `models--state-spaces--mamba3-mimo-187m/` | model.safetensors | 358 MB |
+| `models--EleutherAI--gpt-neox-20b/` | tokenizer.json — Mamba-1/2 | 2.1 MB |
+| `models--unsloth--Meta-Llama-3.1-8B/` | tokenizer.json — Mamba-3 | 17 MB |
+
+Each directory carries the layout the HuggingFace tools use, so an already-populated
+cache is reused and nothing is re-downloaded:
+
+```text
+models--state-spaces--mamba2-130m/
+  refs/refs/pr/1                        -> the commit hash
+  blobs/<etag>                          -> the file contents
+  snapshots/<commit>/model.safetensors  -> a symlink to the blob (a copy where
+                                           symlinks are unavailable)
+```
+
+The checkpoints are read from `refs/pr/1`, a bot's safetensors conversion of the
+official repo — hence the `refs/refs/pr/1` above, against `refs/main` for a
+tokenizer. Mamba-3's tokenizer comes from an ungated mirror of `meta-llama/Llama-3.1-8B`,
+whose own repo is gated: the client sends no credentials, and the deployed wasm page
+has none to send.
+
+Note: "HF_CACHE" is `$HF_HOME/hub` when `HF_HOME` is set, else
+`$HOME/.cache/huggingface/hub` — `%USERPROFILE%` standing in for `$HOME` on Windows.
+That is the HuggingFace convention rather than the platform cache directory, which is
+what lets the cache be shared with `huggingface_hub` and other tools.
 
 ### WASM
 
@@ -141,8 +173,7 @@ wasm-pack build --release --target web --out-dir "frontend/$MAMBA/pkg" \
 miniserve -i 127.0.0.1 "frontend/"   # then open /mamba2/index.html
 ```
 
-**Web Yew UI** — the interactive page, with per-asset fetch / erase / load / unload
-controls and a prompt box:
+**Web Yew UI** — the interactive page, with per-asset controls and a prompt box:
 
 ```bash
 MAMBA="mamba2"
@@ -156,8 +187,11 @@ miniserve -i 127.0.0.1 "frontend/"   # then open /mamba2/index.html
 Notes:
 - `--no-opt` is **required** for `yew` builds — `wasm-opt` breaks them. The console
   build may keep it.
-- The Yew page downloads nothing until you click; generation runs sequentially,
-  one token per timer tick, so the browser keeps painting.
+- The Yew page downloads nothing until you click. Each asset (tokenizer,
+  checkpoint) can be fetched, erased from IndexedDB, loaded, unloaded, saved to a
+  file, or supplied from a local file instead of the network.
+- Generation runs sequentially, one token per timer tick, so the browser keeps
+  painting; it can be paused, resumed and reset.
 - The deployed pages are one model per bundle (`frontend/mamba1`, `frontend/mamba2`, …);
   a bundle built with several model features runs the highest-priority one, named
   on its asset card.
@@ -226,12 +260,44 @@ Mamba is the name of a tribe in the Mambilla region of Tanzania. They are known 
   emits one token per call (this is what the browser uses); `run_parallel` runs
   chunkwise over the whole token list with no cache, re-running the growing prefix
   each iteration.
+- **Tokenizer** — `src/common/tokenizer/` reads a `tokenizer.json` directly and
+  implements exactly two byte-level BPE pipelines: GPT-NeoX (Mamba-1/2) and
+  Llama-3.1 (Mamba-3), regexes hand-rolled, no regex engine. Anything outside those
+  two — including a `Split` pattern that differs by a single quantifier — is
+  rejected at load time, since a near-miss would yield plausible but wrong ids.
+- **Hub client** — `src/common/hub/` resolves a file's metadata and bytes, against
+  the standard on-disk cache natively and against range-fetched IndexedDB chunks in
+  the browser.
 - **Browser asset lifecycle** — the tokenizer and the checkpoint are independent
   assets, each with its own IndexedDB cache state and in-memory load state, so the
   UI can fetch, erase, load and unload them separately.
 
 Anything about SSM math, cache shapes or `Mamba*Config` fields lives in
 [`burn-mamba`](https://github.com/swfsql/burn-mamba) — this repository is the glue.
+
+## Tests
+
+The glue has a small suite: BPE and pre-tokenizer behaviour, the compiled-in model
+list, and — the expensive one to discover otherwise — a replay of the Mamba-3
+checkpoints' vendored safetensors headers through the key remapping, asserting that
+every name lands on a parameter of the built module with a matching shape.
+
+```bash
+cargo test --no-default-features \
+  --features "backend-flex,backend-simd,mamba1,mamba2,mamba3-siso,mamba3-mimo"
+```
+
+One test is `#[ignore]`d: whole-pipeline tokenizer parity needs a downloaded
+`tokenizer.json` plus a reference `text -> ids` map generated by the `tokenizers`
+crate, both passed as env vars (see the module docs in
+[`src/common/tokenizer/mod.rs`](src/common/tokenizer/mod.rs)).
+
+```bash
+TOKENIZER_JSON=… TOKENIZER_IDS=… cargo test --no-default-features -- --ignored
+```
+
+Beyond that, correctness is checked by running the thing: see
+[Verifying a backend](#verifying-a-backend).
 
 ## Development
 
@@ -249,5 +315,9 @@ Mamba-1 adapted from
 [huggingface/candle — mamba-minimal](https://github.com/huggingface/candle/blob/fd7c8565646039e35925b8730d27ddad195d7e73/candle-examples/examples/mamba-minimal/)
 and Mamba-2 from [mamba2-minimal](https://github.com/tommyip/mamba2-minimal); the
 block definitions come from [burn-mamba](https://github.com/swfsql/burn-mamba).
+The tokenizer, sampler and hub client follow
+[tokenizers](https://github.com/huggingface/tokenizers),
+[candle](https://github.com/huggingface/candle) and
+[hf-hub](https://github.com/huggingface/hf-hub) as their reference implementations.
 Weights are the official
 [`state-spaces`](https://huggingface.co/state-spaces) checkpoints.
