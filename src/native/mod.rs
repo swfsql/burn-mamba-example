@@ -3,9 +3,38 @@ use crate::Precision;
 use crate::hub::sync::Api;
 use crate::hub::{FilePath, Repo, RepoId, RepoType, RevisionPath};
 use crate::tokenizer::Tokenizer;
-use crate::{Checkpoint, LogitsProcessorWrapper, MambaWrapper, hf, load_mamba};
+use crate::{Checkpoint, LogitsProcessorWrapper, MambaWrapper, ModelSpec, hf, load_mamba};
 use burn::prelude::*;
 use log::info;
+
+/// Several checkpoints may be compiled in, but the binary runs one; without any
+/// there would be nothing to run. `mamba3` on its own enables the blocks but
+/// neither 187m topology, hence the two sub-features here.
+#[cfg(not(any(
+    feature = "mamba1",
+    feature = "mamba2",
+    feature = "mamba3-siso",
+    feature = "mamba3-mimo"
+)))]
+compile_error!(
+    "the `native` binary needs at least one checkpoint feature: \
+     `mamba1`, `mamba2`, `mamba3-siso` and/or `mamba3-mimo`"
+);
+
+/// Picks the checkpoint to run out of everything compiled in: `MAMBA_MODEL`
+/// (a [ModelSpec::id]) when set, else the highest-priority one.
+pub fn select_model() -> anyhow::Result<&'static ModelSpec> {
+    match std::env::var("MAMBA_MODEL") {
+        Ok(id) => hf::by_id(id.trim()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "MAMBA_MODEL={id:?} is not compiled into this binary; available: {:?}",
+                hf::ids()
+            )
+        }),
+        Err(_) => hf::preferred()
+            .ok_or_else(|| anyhow::anyhow!("no checkpoint feature is enabled in this build")),
+    }
+}
 
 pub fn main() -> anyhow::Result<()> {
     let () = pretty_env_logger::formatted_timed_builder()
@@ -13,14 +42,14 @@ pub fn main() -> anyhow::Result<()> {
         .init();
     info!("init");
 
-    #[cfg(feature = "mamba1")]
-    let mut models = models_mamba1()?;
-    #[cfg(feature = "mamba2")]
-    let mut models = models_mamba2()?;
-    #[cfg(feature = "mamba3-siso")]
-    let mut models = models_mamba3_siso()?;
-    #[cfg(feature = "mamba3-mimo")]
-    let mut models = models_mamba3_mimo()?;
+    let model = select_model()?;
+    info!(
+        "running {} (id {:?}); compiled-in models, by priority: {:?}",
+        model.display_name,
+        model.id,
+        hf::ids()
+    );
+    let mut models = models(model)?;
 
     info!("running in sequential mode (inference-friendly)");
     let sample_len = 80;
@@ -51,76 +80,26 @@ pub fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "mamba1")]
-fn models_mamba1() -> anyhow::Result<MambaWrapper> {
-    models(
-        hf::mamba1_130m::REPO_ID,
-        hf::mamba1_130m::REVISION_PATH,
-        hf::mamba1_130m::FILE_PATH_MODEL_SAFETENSORS,
-        hf::mamba1_130m::tokenizer_source::REPO_ID,
-        hf::mamba1_130m::tokenizer_source::FILE_PATH_TOKENIZER_JSON,
-        hf::mamba1_130m::config(),
-    )
-}
-
-#[cfg(feature = "mamba2")]
-fn models_mamba2() -> anyhow::Result<MambaWrapper> {
-    models(
-        hf::mamba2_130m::REPO_ID,
-        hf::mamba2_130m::REVISION_PATH,
-        hf::mamba2_130m::FILE_PATH_MODEL_SAFETENSORS,
-        hf::mamba2_130m::tokenizer_source::REPO_ID,
-        hf::mamba2_130m::tokenizer_source::FILE_PATH_TOKENIZER_JSON,
-        hf::mamba2_130m::config(),
-    )
-}
-
-#[cfg(feature = "mamba3-siso")]
-fn models_mamba3_siso() -> anyhow::Result<MambaWrapper> {
-    models(
-        hf::mamba3_siso_187m::REPO_ID,
-        hf::mamba3_siso_187m::REVISION_PATH,
-        hf::mamba3_siso_187m::FILE_PATH_MODEL_SAFETENSORS,
-        hf::mamba3_siso_187m::tokenizer_source::REPO_ID,
-        hf::mamba3_siso_187m::tokenizer_source::FILE_PATH_TOKENIZER_JSON,
-        hf::mamba3_siso_187m::config(),
-    )
-}
-
-#[cfg(feature = "mamba3-mimo")]
-fn models_mamba3_mimo() -> anyhow::Result<MambaWrapper> {
-    models(
-        hf::mamba3_mimo_187m::REPO_ID,
-        hf::mamba3_mimo_187m::REVISION_PATH,
-        hf::mamba3_mimo_187m::FILE_PATH_MODEL_SAFETENSORS,
-        hf::mamba3_mimo_187m::tokenizer_source::REPO_ID,
-        hf::mamba3_mimo_187m::tokenizer_source::FILE_PATH_TOKENIZER_JSON,
-        hf::mamba3_mimo_187m::config(),
-    )
-}
-
 /// Downloads (or reuses) the tokenizer and the checkpoint, then builds the model.
-fn models(
-    repo_id: &str,
-    revision_path: &str,
-    model_file: &str,
-    tokenizer_repo_id: &str,
-    tokenizer_file: &str,
-    mamba_config: burn_mamba::prelude::MambaVocabNetConfig,
-) -> anyhow::Result<MambaWrapper> {
+///
+/// Takes the checkpoint to build, so a binary carrying several can build any of
+/// them (see [hf::MODELS]).
+pub fn models(model: &'static ModelSpec) -> anyhow::Result<MambaWrapper> {
     let start = std::time::Instant::now();
 
     let api = Api::new()?;
+    let tokenizer_file = model.file_path_tokenizer_json;
     let tokenizer_filename = api
-        .model(RepoId(tokenizer_repo_id.into()))
+        .model(RepoId(model.tokenizer_repo_id.into()))
         .get(&FilePath(tokenizer_file.into()))?;
     info!("tokenizer {tokenizer_file} path: {tokenizer_filename:?}");
 
     let repo = api.repo(Repo::with_revision(
-        RepoId(repo_id.into()),
+        RepoId(model.repo_id.into()),
         RepoType::Model,
-        RevisionPath(revision_path.into()),
+        RevisionPath(model.revision_path.into()),
     ));
+    let model_file = model.file_path_model_safetensors;
     let mamba_filename = repo.get(&FilePath(model_file.into()))?;
     info!("mamba {model_file} path: {mamba_filename:?}");
     info!("retrieved the files in {:?}", start.elapsed());
@@ -136,12 +115,8 @@ fn models(
 
     let start = std::time::Instant::now();
     info!("started loading the model");
-    let mamba = load_mamba(
-        Checkpoint::File(mamba_filename),
-        mamba_config.clone(),
-        &device,
-    )?;
+    let mamba = load_mamba(Checkpoint::File(mamba_filename), (model.config)(), &device)?;
     info!("loaded the model in {:?}", start.elapsed());
 
-    Ok(MambaWrapper::new(tokenizer, mamba, mamba_config))
+    Ok(MambaWrapper::new(model, tokenizer, mamba))
 }

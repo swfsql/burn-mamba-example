@@ -17,11 +17,17 @@ Mamba-1 adapted from [huggingface/candle/mamba-minimal](https://github.com/huggi
 - Target:
   - ✅ `native`: local executable.
   - ✅ "empty": web console wasm if rustc target is wasm. Can use `yew` for a web wasm UI.
-- Model (for executables, only one can be selected):
+- Model (any combination can be enabled, including all of them):
   - ✅ `mamba1`: Mamba-1 130m.
   - ✅ `mamba2`: Mamba-2 130m.
   - ✅ `mamba3-siso`: Mamba-3 SISO 187m.
   - ✅ `mamba3-mimo`: Mamba-3 MIMO 187m (`mimo_rank: 4`).
+
+  A binary or wasm bundle carries every checkpoint enabled at compile time and
+  runs a single one: the highest priority, which is
+  `mamba3-mimo` > `mamba3-siso` > `mamba2` > `mamba1`. The native binary logs
+  which one it picked plus everything compiled in, and `MAMBA_MODEL=<id>` (e.g.
+  `MAMBA_MODEL=mamba1`) overrides the pick.
 
   The two Mamba-3 checkpoints interleave a SwiGLU MLP with each mixer
   (`d_intermediate > 0`) and use the Llama-3.1 tokenizer rather than GPT-NeoX, so
@@ -71,10 +77,17 @@ Mamba is the name of a tribe in the Mambilla region of Tanzania. They are known 
 ##### Native (Console)
 
 ```bash
-MAMBA="mamba1" # alternatively mamba2, mamba3-siso, mamba3-mimo
+MAMBA="mamba1" # alternatively mamba2, mamba3-siso, mamba3-mimo, or several of them
 RUSTFLAGS="-C target-cpu=native"
 cargo check --no-default-features --features "native,backend-flex,backend-simd,$MAMBA"
 cargo run --release --no-default-features --features "native,backend-flex,backend-simd,$MAMBA"
+
+# one binary with every model, running the highest-priority one (mamba3-mimo);
+# MAMBA_MODEL picks another of the compiled-in ones
+cargo run --release --no-default-features \
+  --features "native,backend-flex,backend-simd,mamba1,mamba2,mamba3-siso,mamba3-mimo"
+MAMBA_MODEL="mamba1" cargo run --release --no-default-features \
+  --features "native,backend-flex,backend-simd,mamba1,mamba2,mamba3-siso,mamba3-mimo"
 ```
 
 Notes:
@@ -115,6 +128,7 @@ Nots:
 - This won't download anything by default, and you must click buttons to download, load and run the model - which is run in sequential mode.
 - Downloads are cached in IndexedDB as 10MB chunks, so they resume across reloads and can be erased from the page.
 - `wasm-opt` is disabled for `yew` with `wasm-pack build --no-opt`.
+- The deployed pages are one model per bundle (`frontend/mamba1`, `frontend/mamba2`, ...); a bundle built with several model features runs the highest-priority one, named on its asset card.
 
 ### Dev
 

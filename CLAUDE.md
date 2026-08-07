@@ -28,15 +28,18 @@ one *backend*:
 | Axis | Choices |
 |------|---------|
 | target | `native` (bin) · *nothing* (wasm console) · `yew` (wasm UI) |
-| model | `mamba1` \| `mamba2` \| `mamba3-siso` \| `mamba3-mimo` — **exactly one** for any binary/wasm build |
+| model | `mamba1` \| `mamba2` \| `mamba3-siso` \| `mamba3-mimo` — **any combination** |
 | backend | `backend-{flex,ndarray,cpu,wgpu,vulkan,cuda,tch-cpu,tch-gpu}`, plus `backend-simd` / `backend-fusion` / `backend-autotune` |
 
-Several model features together compile **only as a library**; the entry points define
-`models`/`active` per-feature and collide if more than one is on. `mamba3-{siso,mimo}`
-both imply `mamba3` (which enables `burn-mamba/mamba3`); `mamba3` alone is library-only,
-since the two checkpoints differ in `mimo_rank`/`d_intermediate`/`chunk_size`.
+Model features **combine**: a binary/wasm build carries every enabled checkpoint as a
+`ModelSpec` in `hf::MODELS` and runs `hf::preferred()` — the highest priority
+(`mamba3-mimo` > `mamba3-siso` > `mamba2` > `mamba1`), which native overrides with
+`MAMBA_MODEL=<id>`. `mamba3-{siso,mimo}` both imply `mamba3` (which enables
+`burn-mamba/mamba3`); `mamba3` alone is library-only — it lists no checkpoint (the two
+differ in `mimo_rank`/`d_intermediate`/`chunk_size`), and the entry points
+`compile_error!` without one.
 
-`bacon.toml` holds the ten canonical check jobs (keys `z x c v b n a s d f`); `Cargo.toml`'s
+`bacon.toml` holds the eleven canonical check jobs (keys `z x c v b n a s d f g`); `Cargo.toml`'s
 commented `default =` lines and `.cargo/config.toml`'s commented `[build] target` are the
 IDE-development switches.
 
@@ -57,6 +60,10 @@ miniserve -i 127.0.0.1 "frontend/"     # then open /mamba2/index.html
 
 # mamba3 swaps the model feature and the frontend dir; everything else is identical
 cargo check --no-default-features --features "native,backend-flex,backend-simd,mamba3-siso"
+
+# all models in one binary; runs mamba3-mimo unless MAMBA_MODEL says otherwise
+cargo check --no-default-features \
+  --features "native,backend-flex,backend-simd,mamba1,mamba2,mamba3-siso,mamba3-mimo"
 wasm-pack build --release --target web --out-dir "frontend/mamba3-mimo/pkg" --no-opt \
   --no-default-features --features "yew,backend-flex,backend-simd,mamba3-mimo"
 
@@ -81,13 +88,19 @@ cargo bench --bench allocations --no-default-features --features "native,backend
 src/
 ├─ lib.rs                 crate root: re-exports common; cfg-gates native/ and wasm/
 ├─ common/                backend- and target-agnostic core (the only thing `default` builds)
-│  ├─ mod.rs              Precision/dtype consts; `hf::{tokenizer,tokenizer_llama31,
-│  │                      mamba1_130m,mamba2_130m,mamba3_{siso,mimo}_187m}` (repo ids +
-│  │                      hardcoded MambaVocabNetConfig, each with `tokenizer_source` +
-│  │                      `DISPLAY_NAME`; the two mamba3 ones from one `mamba3_187m!`
-│  │                      macro); MambaWrapper (run_sequential / run_parallel / step,
-│  │                      `EOS_TOKENS` probed in order); LogitsProcessorWrapper;
-│  │                      device / padded_vocab_size / empty_caches / ssd_path helpers
+│  ├─ mod.rs              Precision/dtype consts; `ModelSpec` (one checkpoint as plain
+│  │                      data: id / display name / repo+file ids / `config` + `ssd_path`
+│  │                      fn pointers) and `hf::{MODELS,preferred,by_id,ids}` — the
+│  │                      priority-ordered list of what this build compiled in;
+│  │                      `hf::{tokenizer,tokenizer_llama31,mamba1_130m,mamba2_130m,
+│  │                      mamba3_{siso,mimo}_187m}` (repo ids + hardcoded
+│  │                      MambaVocabNetConfig, each with `tokenizer_source`,
+│  │                      `DISPLAY_NAME`, `SPEC` and `ssd_path()`; the two mamba3 ones
+│  │                      from one `mamba3_187m!` macro); MambaWrapper (carries its
+│  │                      `spec`; run_sequential / run_parallel / step, `EOS_TOKENS`
+│  │                      probed in order); LogitsProcessorWrapper; device /
+│  │                      padded_vocab_size / empty_caches helpers; tests over the
+│  │                      compiled-in list (priority order, per-checkpoint chunk size)
 │  ├─ store_load.rs       `load_mamba(Checkpoint::{File,Bytes}, config, device)` — the
 │  │                      `burn-store` import (key remapping + adapters) + `tie_lm_head`;
 │  │                      tests replay the vendored mamba3 safetensors manifests through
@@ -114,17 +127,22 @@ src/
 │  │                      IndexedDB (`hf-hub`'s db/store/key names are kept)
 │  └─ token_output_stream.rs  streaming detokenizer (adapted from candle-examples)
 ├─ native/
-│  ├─ mod.rs              `main()`: HF download (hub::sync) → load → sequential
-│  │                      run, then parallel run, both timed
+│  ├─ mod.rs              `select_model()` (`MAMBA_MODEL` else `hf::preferred`) and
+│  │                      `models(spec)`; `main()`: log the pick + everything compiled
+│  │                      in → HF download (hub::sync) → load → sequential run, then
+│  │                      parallel run, both timed
 │  └─ main.rs             thin bin shim (`[[bin]]`, requires `native`)
 └─ wasm/
    ├─ mod.rs              `#[wasm_bindgen] wasm_main()` entry: panic hook, console_log,
-   │                      then console_ui::run() or the Yew renderer
-   ├─ console_ui.rs       no-UI variant: fetch → load → sequential generate → console.log
+   │                      then console_ui::run() or the Yew renderer; `compile_error!`
+   │                      when no checkpoint feature is on
+   ├─ console_ui.rs       no-UI variant: `hf::preferred` → fetch → load → sequential
+   │                      generate → console.log
    └─ yew_ui/             the interactive page
       ├─ mod.rs           `Msg` enum — the whole app protocol (Start/Finish/Fail triads for
       │                   connect, cache-check, fetch, load, erase, build; then generation)
-      ├─ model.rs         Model state (device, cache_api, per-asset ModelData, builder,
+      ├─ model.rs         `active()` = `hf::preferred`; Model state (device, spec,
+      │                   cache_api, per-asset ModelData, builder,
       │                   Wrapper{models,caches,processor}, tokens/output/step)
       ├─ update.rs        the reducer; generation is driven one `step()` per 1ms
       │                   `gloo_timers::Interval` tick so the browser keeps painting
@@ -216,14 +234,17 @@ progress bar. Loaded bytes are fed to `MambaWrapperBuilder::with`, which drops t
   official 187m checkpoints interleave a SwiGLU MLP with every mixer. `Layer` returns the
   layer's **total delta** so `Layers`' single outer add reproduces the reference block's
   two residuals.
-- **Feature-cfg'd bindings are the norm** in entry points — new code touching model choice
-  should keep the one-`#[cfg]`-per-model set, and `#[allow(irrefutable_let_patterns)]` on
-  the `MambaVocabNet*` matches (the enum has one variant under a single feature — so no
-  catch-all arm, which would be unreachable). `yew_ui/model.rs` instead resolves a single
-  `use crate::hf::<model> as active` alias and reads everything through it.
+- **Model choice is runtime data, not `#[cfg]`.** Entry points hold a
+  `&'static ModelSpec` taken from `hf::MODELS`, so new code touching model choice must go
+  through it (adding a checkpoint = a `SPEC` + `ssd_path()` in its `hf` module + one
+  `MODELS` entry at its priority) rather than reintroduce a per-feature binding. Only the
+  `MambaVocabNet*`/`MambaVocabNetConfig` matches stay per-feature, with
+  `#[allow(irrefutable_let_patterns)]` (the enum has one variant under a single feature —
+  so no catch-all arm, which would be unreachable). Anything per-checkpoint that the
+  config alone cannot tell apart — the Mamba-3 `chunk_size` — belongs on the `ModelSpec`.
 - **`frontend/*/pkg/` is generated** by `wasm-pack` and untracked; only `index.html` and
   `index.js` are in git. Don't hand-edit `pkg/`.
-- **CI = deploy.** `.github/workflows/deploy.yml` builds *both* models' yew bundles on push
+- **CI = deploy.** `.github/workflows/deploy.yml` builds all four models' yew bundles on push
   to `main` and publishes `publish/` to `gh-pages`. Adding a model or renaming a feature
   means editing that workflow.
 - **Commit messages**: the user may ask for a commit message for the session. **Just write

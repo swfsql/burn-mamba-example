@@ -25,7 +25,77 @@ use burn::tensor::{FloatDType, IntDType};
 pub const PRECISION_FLOAT_D_TYPE: FloatDType = FloatDType::F32;
 pub const PRECISION_INT_D_TYPE: IntDType = IntDType::I32;
 
+/// One compiled-in checkpoint: everything an entry point needs to fetch, build
+/// and label a model, as plain data.
+///
+/// Any number of model features may be enabled at once; [hf::MODELS] is the
+/// resulting runtime list (highest priority first) and [hf::preferred] is what
+/// an entry point that runs a single model picks.
+#[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
+#[derive(Clone, Copy, Debug)]
+pub struct ModelSpec {
+    /// Selection name; matches the cargo feature and the `frontend/` directory.
+    pub id: &'static str,
+    /// Human-readable name, for logs and the browser UI's asset card.
+    pub display_name: &'static str,
+    /// A [hub::RepoId].
+    pub repo_id: &'static str,
+    /// A [hub::RevisionPath].
+    pub revision_path: &'static str,
+    /// A [hub::FilePath].
+    pub file_path_model_safetensors: &'static str,
+    /// A [hub::RepoId], of the repo this checkpoint's tokenizer comes from.
+    pub tokenizer_repo_id: &'static str,
+    /// A [hub::FilePath].
+    pub file_path_tokenizer_json: &'static str,
+    /// The hardcoded topology, mirroring the checkpoint's `config.json`.
+    pub config: fn() -> MambaVocabNetConfig,
+    /// The scan the parallel path takes, including the chunk length the
+    /// checkpoint was trained with.
+    pub ssd_path: fn() -> MambaSsdPath,
+}
+
 pub mod hf {
+    #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
+    use crate::ModelSpec;
+
+    /// Every checkpoint compiled into this build, **highest priority first**.
+    ///
+    /// The order is the priority: mamba3-mimo > mamba3-siso > mamba2 > mamba1.
+    #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
+    pub const MODELS: &[&ModelSpec] = &[
+        #[cfg(feature = "mamba3-mimo")]
+        &mamba3_mimo_187m::SPEC,
+        #[cfg(feature = "mamba3-siso")]
+        &mamba3_siso_187m::SPEC,
+        #[cfg(feature = "mamba2")]
+        &mamba2_130m::SPEC,
+        #[cfg(feature = "mamba1")]
+        &mamba1_130m::SPEC,
+    ];
+
+    /// The checkpoint to use when exactly one model should run: the
+    /// highest-priority entry of [MODELS].
+    ///
+    /// [None] only for a build with no checkpoint feature — `mamba3` on its own
+    /// enables the blocks but neither 187m topology.
+    #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
+    pub fn preferred() -> Option<&'static ModelSpec> {
+        MODELS.first().copied()
+    }
+
+    /// Looks a compiled-in checkpoint up by [ModelSpec::id].
+    #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
+    pub fn by_id(id: &str) -> Option<&'static ModelSpec> {
+        MODELS.iter().copied().find(|model| model.id == id)
+    }
+
+    /// The [ModelSpec::id] of every compiled-in checkpoint, for error messages.
+    #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
+    pub fn ids() -> Vec<&'static str> {
+        MODELS.iter().map(|model| model.id).collect()
+    }
+
     /// The tokenizer of the Mamba-1 / Mamba-2 130m checkpoints.
     pub mod tokenizer {
         #[allow(unused_imports)]
@@ -60,6 +130,19 @@ pub mod hf {
         use crate::hub::{FilePath, RepoId, RevisionPath};
         use burn_mamba::mamba1;
         use burn_mamba::prelude::*;
+
+        /// This checkpoint's entry in [super::MODELS].
+        pub const SPEC: crate::ModelSpec = crate::ModelSpec {
+            id: "mamba1",
+            display_name: DISPLAY_NAME,
+            repo_id: REPO_ID,
+            revision_path: REVISION_PATH,
+            file_path_model_safetensors: FILE_PATH_MODEL_SAFETENSORS,
+            tokenizer_repo_id: tokenizer_source::REPO_ID,
+            file_path_tokenizer_json: tokenizer_source::FILE_PATH_TOKENIZER_JSON,
+            config,
+            ssd_path,
+        };
 
         /// A [RepoId].
         pub const REPO_ID: &str = "state-spaces/mamba-130m";
@@ -105,6 +188,10 @@ pub mod hf {
                 .with_has_conv_bias(true), // default
             }
         }
+
+        pub fn ssd_path() -> MambaSsdPath {
+            MambaSsdPath::Mamba1
+        }
     }
 
     #[cfg(feature = "mamba2")]
@@ -113,6 +200,19 @@ pub mod hf {
         use crate::hub::{FilePath, RepoId, RevisionPath};
         use burn_mamba::mamba2;
         use burn_mamba::prelude::*;
+
+        /// This checkpoint's entry in [super::MODELS].
+        pub const SPEC: crate::ModelSpec = crate::ModelSpec {
+            id: "mamba2",
+            display_name: DISPLAY_NAME,
+            repo_id: REPO_ID,
+            revision_path: REVISION_PATH,
+            file_path_model_safetensors: FILE_PATH_MODEL_SAFETENSORS,
+            tokenizer_repo_id: tokenizer_source::REPO_ID,
+            file_path_tokenizer_json: tokenizer_source::FILE_PATH_TOKENIZER_JSON,
+            config,
+            ssd_path,
+        };
 
         /// A [RepoId].
         pub const REPO_ID: &str = "state-spaces/mamba2-130m";
@@ -161,6 +261,10 @@ pub mod hf {
                 .with_has_conv_bias(true), // default
             }
         }
+
+        pub fn ssd_path() -> MambaSsdPath {
+            MambaSsdPath::Mamba2(Mamba2SsdPath::SerialRecalculated(None))
+        }
     }
 
     /// Shared shape of the two official Mamba-3 187m checkpoints.
@@ -174,6 +278,7 @@ pub mod hf {
     macro_rules! mamba3_187m {
         (
             $module:ident,
+            id = $id:literal,
             repo = $repo:literal,
             display_name = $display_name:literal,
             d_intermediate = $d_intermediate:expr,
@@ -186,6 +291,21 @@ pub mod hf {
                 use burn_mamba::mamba3;
                 use burn_mamba::modules::GatedMlpConfig;
                 use burn_mamba::prelude::*;
+
+                /// This checkpoint's entry in [super::MODELS] — only listed
+                /// there under this topology's own feature, since `mamba3`
+                /// alone picks neither.
+                pub const SPEC: crate::ModelSpec = crate::ModelSpec {
+                    id: $id,
+                    display_name: DISPLAY_NAME,
+                    repo_id: REPO_ID,
+                    revision_path: REVISION_PATH,
+                    file_path_model_safetensors: FILE_PATH_MODEL_SAFETENSORS,
+                    tokenizer_repo_id: tokenizer_source::REPO_ID,
+                    file_path_tokenizer_json: tokenizer_source::FILE_PATH_TOKENIZER_JSON,
+                    config,
+                    ssd_path,
+                };
 
                 /// A [RepoId].
                 pub const REPO_ID: &str = $repo;
@@ -255,6 +375,10 @@ pub mod hf {
                         .with_siso_specialization_decode(false),
                     }
                 }
+
+                pub fn ssd_path() -> MambaSsdPath {
+                    MambaSsdPath::Mamba3(Mamba3SsdPath::SerialRecalculated(Some(CHUNK_SIZE)))
+                }
             }
         };
     }
@@ -262,6 +386,7 @@ pub mod hf {
     #[cfg(feature = "mamba3")]
     mamba3_187m!(
         mamba3_siso_187m,
+        id = "mamba3-siso",
         repo = "state-spaces/mamba3-siso-187m",
         display_name = "Mamba3-SISO-187m",
         d_intermediate = 1536,
@@ -272,6 +397,7 @@ pub mod hf {
     #[cfg(feature = "mamba3")]
     mamba3_187m!(
         mamba3_mimo_187m,
+        id = "mamba3-mimo",
         repo = "state-spaces/mamba3-mimo-187m",
         display_name = "Mamba3-MIMO-187m",
         d_intermediate = 1264,
@@ -282,6 +408,9 @@ pub mod hf {
 
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 pub struct MambaWrapper {
+    /// Which checkpoint this is — the run modes read the topology and the scan
+    /// path from it, so a build carrying several models keeps them apart.
+    pub spec: &'static ModelSpec,
     pub tokenizer: TokenOutputStream,
     pub mamba: MambaVocabNet,
     pub mamba_config: MambaVocabNetConfig,
@@ -295,15 +424,12 @@ pub struct LogitsProcessorWrapper {
 
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 impl MambaWrapper {
-    pub fn new(
-        tokenizer: Tokenizer,
-        mamba: MambaVocabNet,
-        mamba_config: MambaVocabNetConfig,
-    ) -> Self {
+    pub fn new(spec: &'static ModelSpec, tokenizer: Tokenizer, mamba: MambaVocabNet) -> Self {
         Self {
+            spec,
             tokenizer: TokenOutputStream::new(tokenizer),
             mamba,
-            mamba_config,
+            mamba_config: (spec.config)(),
         }
     }
 
@@ -365,7 +491,7 @@ impl MambaWrapper {
             let input: Tensor<1, Int> = Tensor::from_data(tokens.as_slice(), &device);
             let input = input.unsqueeze();
 
-            let ssd_path = ssd_path(&self.mamba_config);
+            let ssd_path = (self.spec.ssd_path)();
             let (logits_list, _caches) = self.mamba.forward(input, None, ssd_path);
             if i == 0 {
                 instant = Some(std::time::Instant::now());
@@ -634,25 +760,57 @@ pub fn empty_caches(
     }
 }
 
-#[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
-pub fn ssd_path(mamba_config: &MambaVocabNetConfig) -> MambaSsdPath {
-    match mamba_config {
-        #[cfg(feature = "mamba1")]
-        MambaVocabNetConfig::Mamba1 { .. } => MambaSsdPath::Mamba1,
-        #[cfg(feature = "mamba2")]
-        MambaVocabNetConfig::Mamba2 { .. } => {
-            MambaSsdPath::Mamba2(Mamba2SsdPath::SerialRecalculated(None))
+/// Checks the compiled-in checkpoint list, whatever set of model features this
+/// build happens to enable.
+#[cfg(all(test, any(feature = "mamba1", feature = "mamba2", feature = "mamba3")))]
+mod tests {
+    use super::*;
+
+    /// Highest priority first, and every [ModelSpec::id] resolvable — that
+    /// ordering is what the entry points take when they run a single model.
+    #[test]
+    fn models_are_listed_by_descending_priority() {
+        const PRIORITY: [&str; 4] = ["mamba3-mimo", "mamba3-siso", "mamba2", "mamba1"];
+
+        let ids = hf::ids();
+        let ranks: Vec<usize> = ids
+            .iter()
+            .map(|id| {
+                PRIORITY
+                    .iter()
+                    .position(|known| known == id)
+                    .unwrap_or_else(|| panic!("{id:?} is missing from the priority list"))
+            })
+            .collect();
+        assert!(
+            ranks.windows(2).all(|pair| pair[0] < pair[1]),
+            "{ids:?} is not ordered by descending priority"
+        );
+
+        for id in &ids {
+            assert_eq!(hf::by_id(id).map(|model| model.id), Some(*id));
         }
-        // The chunk length the checkpoint was trained with; the two Mamba-3
-        // checkpoints disagree (64 for SISO, 16 for MIMO), so it is read from the
-        // per-model constant rather than left to the path's own default.
-        #[cfg(feature = "mamba3-siso")]
-        MambaVocabNetConfig::Mamba3 { .. } => MambaSsdPath::Mamba3(
-            Mamba3SsdPath::SerialRecalculated(Some(hf::mamba3_siso_187m::CHUNK_SIZE)),
-        ),
-        #[cfg(all(feature = "mamba3", not(feature = "mamba3-siso")))]
-        MambaVocabNetConfig::Mamba3 { .. } => MambaSsdPath::Mamba3(
-            Mamba3SsdPath::SerialRecalculated(Some(hf::mamba3_mimo_187m::CHUNK_SIZE)),
-        ),
+        assert_eq!(hf::preferred().map(|model| model.id), ids.first().copied());
+    }
+
+    /// The two Mamba-3 checkpoints were trained with different chunk lengths, so
+    /// each one's scan must carry its own — a build with both compiled in still
+    /// keeps them apart.
+    #[cfg(feature = "mamba3")]
+    #[test]
+    fn each_mamba3_checkpoint_keeps_its_own_chunk_size() {
+        let checkpoints = [
+            (hf::mamba3_siso_187m::SPEC, hf::mamba3_siso_187m::CHUNK_SIZE),
+            (hf::mamba3_mimo_187m::SPEC, hf::mamba3_mimo_187m::CHUNK_SIZE),
+        ];
+        assert_ne!(checkpoints[0].1, checkpoints[1].1);
+
+        for (spec, chunk_size) in checkpoints {
+            let path = (spec.ssd_path)();
+            let MambaSsdPath::Mamba3(Mamba3SsdPath::SerialRecalculated(Some(got))) = path else {
+                panic!("{}: expected a chunked Mamba-3 scan, got {path:?}", spec.id)
+            };
+            assert_eq!(got, chunk_size, "{}", spec.id);
+        }
     }
 }

@@ -4,28 +4,24 @@ use crate::hub::{
     UrlTemplate,
 };
 use crate::tokenizer::Tokenizer;
-use crate::{Checkpoint, LogitsProcessorWrapper, MambaWrapper, load_mamba};
+use crate::{Checkpoint, LogitsProcessorWrapper, MambaWrapper, ModelSpec, hf, load_mamba};
 use burn::prelude::*;
 use burn_mamba::prelude::*;
 
-/// The single checkpoint this bundle was built for.
+/// The checkpoint this page runs.
 ///
-/// A wasm build enables exactly one model feature, so this alias resolves once
-/// and every repo id / config / display name below reads through it. Enabling
-/// two collides on the name, which is the intended compile error.
-#[cfg(feature = "mamba1")]
-use crate::hf::mamba1_130m as active;
-#[cfg(feature = "mamba2")]
-use crate::hf::mamba2_130m as active;
-#[cfg(feature = "mamba3-mimo")]
-use crate::hf::mamba3_mimo_187m as active;
-#[cfg(feature = "mamba3-siso")]
-use crate::hf::mamba3_siso_187m as active;
+/// A bundle may carry several; the UI drives one, so it takes the
+/// highest-priority compiled-in checkpoint (see [hf::preferred]).
+fn active() -> &'static ModelSpec {
+    hf::preferred().expect("no checkpoint feature is enabled in this build")
+}
 
 pub struct Model {
     // general data
     /// Backend device.
     pub device: Device,
+    /// Which checkpoint the asset cards fetch and the generation runs.
+    pub spec: &'static ModelSpec,
 
     // fetching, loading, building
     /// Can check the cache, fetch and load data.
@@ -85,9 +81,12 @@ impl Default for Model {
                 .expect("Failed to install fp32/i32 device defaults");
         }
 
+        let spec = active();
+
         Self {
             // general data
             device,
+            spec,
             // fetching, loading, building
             cache_api: Connection::Disconnected,
             tokenizer: ModelData::new(
@@ -95,21 +94,21 @@ impl Default for Model {
                 ModelDataConfig::Huggingface(HuggingfaceConfig {
                     endpoint: Endpoint::default(),
                     url_template: UrlTemplate::default(),
-                    repo_id: RepoId(active::tokenizer_source::REPO_ID.into()),
+                    repo_id: RepoId(spec.tokenizer_repo_id.into()),
                     repo_type: RepoType::Model,
                     revision: RevisionPath::default(),
-                    filepath: FilePath(active::tokenizer_source::FILE_PATH_TOKENIZER_JSON.into()),
+                    filepath: FilePath(spec.file_path_tokenizer_json.into()),
                 }),
             ),
             mamba: ModelData::new(
-                active::DISPLAY_NAME.into(),
+                spec.display_name.into(),
                 ModelDataConfig::Huggingface(HuggingfaceConfig {
                     endpoint: Endpoint::default(),
                     url_template: UrlTemplate::default(),
-                    repo_id: RepoId(active::REPO_ID.into()),
+                    repo_id: RepoId(spec.repo_id.into()),
                     repo_type: RepoType::Model,
-                    revision: RevisionPath(active::REVISION_PATH.into()),
-                    filepath: FilePath(active::FILE_PATH_MODEL_SAFETENSORS.into()),
+                    revision: RevisionPath(spec.revision_path.into()),
+                    filepath: FilePath(spec.file_path_model_safetensors.into()),
                 }),
             ),
             models_wrapper_builder: MambaWrapperBuilder::default(),
@@ -132,17 +131,17 @@ impl Default for Model {
 }
 
 pub struct MambaWrapperBuilder {
+    pub spec: Option<&'static ModelSpec>,
     pub tokenizer: Option<Tokenizer>,
     pub mamba: Option<MambaVocabNet>,
-    pub mamba_config: Option<MambaVocabNetConfig>,
 }
 
 impl Default for MambaWrapperBuilder {
     fn default() -> Self {
         MambaWrapperBuilder {
+            spec: Some(active()),
             tokenizer: None,
             mamba: None,
-            mamba_config: Some(active::config()),
         }
     }
 }
@@ -165,8 +164,9 @@ impl MambaWrapperBuilder {
                     let timing = web_time::Instant::now();
                     log::info!("initializing and loading mamba model");
 
-                    let mamba_config = self.mamba_config.clone().expect("missing mamba config");
-                    let mamba = load_mamba(Checkpoint::Bytes(data), mamba_config, device).unwrap();
+                    let spec = self.spec.expect("missing model spec");
+                    let mamba =
+                        load_mamba(Checkpoint::Bytes(data), (spec.config)(), device).unwrap();
                     log::info!(
                         "mamba initialized and loaded in {}ms",
                         timing.elapsed().as_millis()
@@ -180,23 +180,23 @@ impl MambaWrapperBuilder {
     }
     pub fn merge(self, other: Self) -> Self {
         Self {
+            spec: self.spec.or(other.spec),
             tokenizer: self.tokenizer.or(other.tokenizer),
             mamba: self.mamba.or(other.mamba),
-            mamba_config: self.mamba_config.or(other.mamba_config),
         }
     }
 }
 
 impl From<MambaWrapperBuilder> for Wrapper {
     fn from(value: MambaWrapperBuilder) -> Self {
-        match (value.tokenizer, value.mamba, value.mamba_config) {
-            (Some(t), Some(m), Some(c)) => {
-                let models = MambaWrapper::new(t, m, c);
+        match (value.spec, value.tokenizer, value.mamba) {
+            (Some(s), Some(t), Some(m)) => {
+                let models = MambaWrapper::new(s, t, m);
                 Wrapper::new(models)
             }
-            (None, _, _) => panic!("missing tokenizer"),
-            (_, None, _) => panic!("missing mamba"),
-            (_, _, None) => panic!("missing mamba config"),
+            (None, _, _) => panic!("missing model spec"),
+            (_, None, _) => panic!("missing tokenizer"),
+            (_, _, None) => panic!("missing mamba"),
         }
     }
 }

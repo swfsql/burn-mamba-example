@@ -5,6 +5,20 @@ pub mod yew_ui;
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
+/// Several checkpoints may be compiled in, but a bundle runs one; without any
+/// there would be nothing to run. `mamba3` on its own enables the blocks but
+/// neither 187m topology, hence the two sub-features here.
+#[cfg(not(any(
+    feature = "mamba1",
+    feature = "mamba2",
+    feature = "mamba3-siso",
+    feature = "mamba3-mimo"
+)))]
+compile_error!(
+    "a wasm bundle needs at least one checkpoint feature: \
+     `mamba1`, `mamba2`, `mamba3-siso` and/or `mamba3-mimo`"
+);
+
 #[allow(unused_imports)]
 use crate::Precision;
 

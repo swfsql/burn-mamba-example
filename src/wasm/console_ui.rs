@@ -1,18 +1,19 @@
 use crate::hub::wasm::Api;
 use crate::hub::{FilePath, Repo, RepoId, RepoType, RevisionPath};
 use crate::tokenizer::Tokenizer;
-use crate::{Checkpoint, LogitsProcessorWrapper, MambaWrapper, hf, load_mamba};
+use crate::{Checkpoint, LogitsProcessorWrapper, MambaWrapper, ModelSpec, hf, load_mamba};
 use burn::prelude::*;
 
 pub async fn run() -> anyhow::Result<()> {
-    #[cfg(feature = "mamba1")]
-    let mut models = models_mamba1().await?;
-    #[cfg(feature = "mamba2")]
-    let mut models = models_mamba2().await?;
-    #[cfg(feature = "mamba3-siso")]
-    let mut models = models_mamba3_siso().await?;
-    #[cfg(feature = "mamba3-mimo")]
-    let mut models = models_mamba3_mimo().await?;
+    let model = hf::preferred()
+        .ok_or_else(|| anyhow::anyhow!("no checkpoint feature is enabled in this build"))?;
+    log::info!(
+        "running {} (id {:?}); compiled-in models, by priority: {:?}",
+        model.display_name,
+        model.id,
+        hf::ids()
+    );
+    let mut models = models(model).await?;
 
     let prompt = "Mamba is the";
     let sample_len = 30;
@@ -80,75 +81,19 @@ pub async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "mamba1")]
-pub async fn models_mamba1() -> anyhow::Result<MambaWrapper> {
-    models(
-        hf::mamba1_130m::REPO_ID,
-        hf::mamba1_130m::REVISION_PATH,
-        hf::mamba1_130m::FILE_PATH_MODEL_SAFETENSORS,
-        hf::mamba1_130m::tokenizer_source::REPO_ID,
-        hf::mamba1_130m::tokenizer_source::FILE_PATH_TOKENIZER_JSON,
-        hf::mamba1_130m::config(),
-    )
-    .await
-}
-
-#[cfg(feature = "mamba2")]
-pub async fn models_mamba2() -> anyhow::Result<MambaWrapper> {
-    models(
-        hf::mamba2_130m::REPO_ID,
-        hf::mamba2_130m::REVISION_PATH,
-        hf::mamba2_130m::FILE_PATH_MODEL_SAFETENSORS,
-        hf::mamba2_130m::tokenizer_source::REPO_ID,
-        hf::mamba2_130m::tokenizer_source::FILE_PATH_TOKENIZER_JSON,
-        hf::mamba2_130m::config(),
-    )
-    .await
-}
-
-#[cfg(feature = "mamba3-siso")]
-pub async fn models_mamba3_siso() -> anyhow::Result<MambaWrapper> {
-    models(
-        hf::mamba3_siso_187m::REPO_ID,
-        hf::mamba3_siso_187m::REVISION_PATH,
-        hf::mamba3_siso_187m::FILE_PATH_MODEL_SAFETENSORS,
-        hf::mamba3_siso_187m::tokenizer_source::REPO_ID,
-        hf::mamba3_siso_187m::tokenizer_source::FILE_PATH_TOKENIZER_JSON,
-        hf::mamba3_siso_187m::config(),
-    )
-    .await
-}
-
-#[cfg(feature = "mamba3-mimo")]
-pub async fn models_mamba3_mimo() -> anyhow::Result<MambaWrapper> {
-    models(
-        hf::mamba3_mimo_187m::REPO_ID,
-        hf::mamba3_mimo_187m::REVISION_PATH,
-        hf::mamba3_mimo_187m::FILE_PATH_MODEL_SAFETENSORS,
-        hf::mamba3_mimo_187m::tokenizer_source::REPO_ID,
-        hf::mamba3_mimo_187m::tokenizer_source::FILE_PATH_TOKENIZER_JSON,
-        hf::mamba3_mimo_187m::config(),
-    )
-    .await
-}
-
 /// Fetches (or reuses the IndexedDB cache of) the tokenizer and the checkpoint,
 /// then builds the model.
-async fn models(
-    repo_id: &str,
-    revision_path: &str,
-    model_file: &str,
-    tokenizer_repo_id: &str,
-    tokenizer_file: &str,
-    mamba_config: burn_mamba::prelude::MambaVocabNetConfig,
-) -> anyhow::Result<MambaWrapper> {
+///
+/// Takes the checkpoint to build, so a bundle carrying several can build any of
+/// them (see [hf::MODELS]).
+pub async fn models(model: &'static ModelSpec) -> anyhow::Result<MambaWrapper> {
     let api = Api::new().await?;
 
     let tokenizer = {
         let timing = web_time::Instant::now();
         let bytes = api
-            .model(RepoId(tokenizer_repo_id.into()))
-            .get_bytes(&FilePath(tokenizer_file.into()))
+            .model(RepoId(model.tokenizer_repo_id.into()))
+            .get_bytes(&FilePath(model.file_path_tokenizer_json.into()))
             .await?;
         log::info!(
             "tokenizer data loaded in {}ms",
@@ -172,17 +117,17 @@ async fn models(
         let timing = web_time::Instant::now();
         let bytes = api
             .repo(Repo::with_revision(
-                RepoId(repo_id.into()),
+                RepoId(model.repo_id.into()),
                 RepoType::Model,
-                RevisionPath(revision_path.into()),
+                RevisionPath(model.revision_path.into()),
             ))
-            .get_bytes(&FilePath(model_file.into()))
+            .get_bytes(&FilePath(model.file_path_model_safetensors.into()))
             .await?;
         log::info!("mamba data loaded in {}ms", timing.elapsed().as_millis());
 
         let timing = web_time::Instant::now();
         log::info!("initializing and loading mamba model");
-        let mamba = load_mamba(Checkpoint::Bytes(bytes), mamba_config.clone(), &device)?;
+        let mamba = load_mamba(Checkpoint::Bytes(bytes), (model.config)(), &device)?;
         log::info!(
             "mamba initialized and loaded in {}ms",
             timing.elapsed().as_millis()
@@ -190,5 +135,5 @@ async fn models(
         mamba
     };
 
-    Ok(MambaWrapper::new(tokenizer, mamba, mamba_config))
+    Ok(MambaWrapper::new(model, tokenizer, mamba))
 }

@@ -1,6 +1,6 @@
 [package]
 name = "burn-mamba-example"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 
 [features]
@@ -13,11 +13,15 @@ default = [] # by default just re-exports common/ as a library
 # default = ["backend-flex", "mamba2"] # for wasm web-console dev - also check .cargo/config.toml
 # default = ["backend-flex", "yew", "mamba2"] # for wasm + web-yew dev - also check .cargo/config.toml
 #
-## mamba version (can have both features only as a library)
+## mamba version - any combination may be enabled; a binary/wasm build carries
+## every enabled checkpoint and runs the highest-priority one
+## (mamba3-mimo > mamba3-siso > mamba2 > mamba1), overridable natively with
+## `MAMBA_MODEL=<id>`
 mamba1 = ["burn-mamba/mamba1"]
 mamba2 = ["burn-mamba/mamba2"]
-## mamba3 covers both official 187m checkpoints; pick the topology with
-## `mamba3-siso` / `mamba3-mimo` (exactly one for a binary/wasm build)
+## mamba3 only enables the blocks; the two official 187m checkpoints differ in
+## `mimo_rank`/`d_intermediate`/`chunk_size`, so a runnable build needs
+## `mamba3-siso` and/or `mamba3-mimo`
 mamba3 = ["burn-mamba/mamba3"]
 mamba3-siso = ["mamba3"]
 mamba3-mimo = ["mamba3"]
