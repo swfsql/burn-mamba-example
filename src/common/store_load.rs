@@ -109,7 +109,7 @@ fn key_remapping(config: &MambaVocabNetConfig) -> Vec<(&'static str, &'static st
             rules.push((r"\.mamba_block\.dt_bias$", ".mamba_block.dt_bias_h"));
         }
         #[cfg(feature = "mamba3")]
-        MambaVocabNetConfig::Mamba3 { .. } => {
+        MambaVocabNetConfig::Mamba3 { mamba_block, .. } => {
             // Mamba-3 has no `A_log`: A is data-dependent, projected out of
             // `in_proj` rather than stored.
             rules.push((r"\.mamba_block\.D$", ".mamba_block.d_h"));
@@ -126,11 +126,14 @@ fn key_remapping(config: &MambaVocabNetConfig) -> Vec<(&'static str, &'static st
                 r"\.mamba_block\.C_norm\.weight$",
                 ".mamba_block.c_norm.gamma",
             ));
-            // MIMO-only; absent from the SISO checkpoint, where the rules simply
-            // match nothing.
-            rules.push((r"\.mamba_block\.mimo_x$", ".mamba_block.mimo_x_hmp"));
-            rules.push((r"\.mamba_block\.mimo_z$", ".mamba_block.mimo_z_hmp"));
-            rules.push((r"\.mamba_block\.mimo_o$", ".mamba_block.mimo_o_hmp"));
+            // The MIMO projections exist only at `mimo_rank > 1`: the SISO
+            // checkpoint stores none and `Mamba3` holds `None` in their place,
+            // so the rules are conditioned on the same thing the tensors are.
+            if mamba_block.mimo_rank > 1 {
+                rules.push((r"\.mamba_block\.mimo_x$", ".mamba_block.mimo_x_hmp"));
+                rules.push((r"\.mamba_block\.mimo_z$", ".mamba_block.mimo_z_hmp"));
+                rules.push((r"\.mamba_block\.mimo_o$", ".mamba_block.mimo_o_hmp"));
+            }
         }
     }
     rules
@@ -171,22 +174,73 @@ pub fn tie_lm_head(mamba: &mut MambaVocabNet, device: &Device) {
     }
 }
 
-/// Checks [`key_remapping`] against the real checkpoint manifests.
+/// Checks [`key_remapping`] against the real checkpoint manifests: nothing on
+/// either side of the load may be left dangling.
 ///
-/// A remapping bug is otherwise only discoverable by downloading ~750MB and
-/// watching the load fail, so the checkpoints' `model.safetensors` headers are
-/// vendored here — every tensor of layer 0 plus the two model-level ones, read
-/// from `refs/pr/1` of each repo. Each name is pushed through the same rules the
-/// store uses and must land exactly on a parameter the built module exposes,
-/// with a matching shape.
-#[cfg(all(test, feature = "mamba3"))]
+/// A remapping bug is otherwise only discoverable by downloading ~1.1GB and
+/// watching the load fail, so every compiled-in checkpoint's `model.safetensors`
+/// header is vendored here — the model-level tensors plus the whole of layer 0,
+/// read from `refs/pr/1` of each repo. Each name is pushed through the same
+/// rules the store uses, and the resulting set must be *exactly* the set of
+/// parameters the built module exposes, with matching shapes: a checkpoint
+/// tensor landing on no parameter would be silently dropped (`load_from` only
+/// logs those), and a parameter no tensor fills would keep its random init.
+/// [`remapping_rules_all_fire`] closes the third gap — a rule matching nothing,
+/// which is a rule that has stopped describing the checkpoint — and
+/// [`manifests_cover_the_whole_checkpoint`] the fourth: a manifest that is not
+/// the whole file.
+#[cfg(all(test, any(feature = "mamba1", feature = "mamba2", feature = "mamba3")))]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
-    /// `(checkpoint name, checkpoint shape)` for one layer plus the globals.
+    /// `(checkpoint tensor name, checkpoint shape)`.
     type Manifest = &'static [(&'static str, &'static [usize])];
 
+    /// One checkpoint's vendored `model.safetensors` header.
+    struct Vendored {
+        /// The checkpoint it was read from.
+        spec: &'static crate::ModelSpec,
+        /// Everything outside `backbone.layers.`, plus the whole of layer 0.
+        /// Every layer repeats layer 0's names and shapes, which is what lets
+        /// one layer stand for all of them.
+        manifest: Manifest,
+        /// How many times layer 0 repeats.
+        n_layers: usize,
+    }
+
+    #[cfg(feature = "mamba1")]
+    const MAMBA1_MANIFEST: Manifest = &[
+        ("backbone.embedding.weight", &[50280, 768]),
+        ("backbone.norm_f.weight", &[768]),
+        ("backbone.layers.0.norm.weight", &[768]),
+        ("backbone.layers.0.mixer.A_log", &[1536, 16]),
+        ("backbone.layers.0.mixer.D", &[1536]),
+        ("backbone.layers.0.mixer.conv1d.bias", &[1536]),
+        ("backbone.layers.0.mixer.conv1d.weight", &[1536, 1, 4]),
+        ("backbone.layers.0.mixer.dt_proj.bias", &[1536]),
+        ("backbone.layers.0.mixer.dt_proj.weight", &[1536, 48]),
+        ("backbone.layers.0.mixer.in_proj.weight", &[3072, 768]),
+        ("backbone.layers.0.mixer.out_proj.weight", &[768, 1536]),
+        ("backbone.layers.0.mixer.x_proj.weight", &[80, 1536]),
+    ];
+
+    #[cfg(feature = "mamba2")]
+    const MAMBA2_MANIFEST: Manifest = &[
+        ("backbone.embedding.weight", &[50288, 768]),
+        ("backbone.norm_f.weight", &[768]),
+        ("backbone.layers.0.norm.weight", &[768]),
+        ("backbone.layers.0.mixer.A_log", &[24]),
+        ("backbone.layers.0.mixer.D", &[24]),
+        ("backbone.layers.0.mixer.conv1d.bias", &[1792]),
+        ("backbone.layers.0.mixer.conv1d.weight", &[1792, 1, 4]),
+        ("backbone.layers.0.mixer.dt_bias", &[24]),
+        ("backbone.layers.0.mixer.in_proj.weight", &[3352, 768]),
+        ("backbone.layers.0.mixer.norm.weight", &[1536]),
+        ("backbone.layers.0.mixer.out_proj.weight", &[768, 1536]),
+    ];
+
+    #[cfg(feature = "mamba3")]
     const SISO_MANIFEST: Manifest = &[
         ("backbone.embedding.weight", &[128256, 768]),
         ("backbone.norm_f.weight", &[768]),
@@ -204,6 +258,7 @@ mod tests {
         ("backbone.layers.0.mlp.fc2.weight", &[768, 1536]),
     ];
 
+    #[cfg(feature = "mamba3")]
     const MIMO_MANIFEST: Manifest = &[
         ("backbone.embedding.weight", &[128256, 768]),
         ("backbone.norm_f.weight", &[768]),
@@ -224,51 +279,118 @@ mod tests {
         ("backbone.layers.0.mlp.fc2.weight", &[768, 1280]),
     ];
 
-    /// One layer and a token-sized vocabulary: the parameter *paths* do not
-    /// depend on either, and this keeps the test from allocating the real 187M
-    /// parameters. The embedding is excluded from the shape comparison for the
-    /// same reason.
-    #[allow(irrefutable_let_patterns)]
+    /// Every checkpoint this build compiled in, whatever set of model features
+    /// that is.
+    const VENDORED: &[Vendored] = &[
+        #[cfg(feature = "mamba1")]
+        Vendored {
+            spec: &crate::hf::mamba1_130m::SPEC,
+            manifest: MAMBA1_MANIFEST,
+            n_layers: crate::hf::mamba1_130m::N_LAYER,
+        },
+        #[cfg(feature = "mamba2")]
+        Vendored {
+            spec: &crate::hf::mamba2_130m::SPEC,
+            manifest: MAMBA2_MANIFEST,
+            n_layers: crate::hf::mamba2_130m::N_LAYER,
+        },
+        #[cfg(feature = "mamba3")]
+        Vendored {
+            spec: &crate::hf::mamba3_siso_187m::SPEC,
+            manifest: SISO_MANIFEST,
+            n_layers: crate::hf::mamba3_siso_187m::N_LAYER,
+        },
+        #[cfg(feature = "mamba3")]
+        Vendored {
+            spec: &crate::hf::mamba3_mimo_187m::SPEC,
+            manifest: MIMO_MANIFEST,
+            n_layers: crate::hf::mamba3_mimo_187m::N_LAYER,
+        },
+    ];
+
+    /// The vocabulary the comparison module is built with. Small enough to keep
+    /// the test from allocating the real 130M/187M parameters, and a multiple of
+    /// every checkpoint's `pad_vocab_size_multiple`, so it survives the padding
+    /// unchanged.
+    const TEST_VOCAB: usize = 64;
+
+    /// [`key_remapping`] applied to a manifest.
+    struct Remapped {
+        /// `module path → shape`, as the store would see it.
+        params: BTreeMap<String, Vec<usize>>,
+        /// `(rule pattern, how many names it rewrote)`, in [`key_remapping`]
+        /// order.
+        rule_hits: Vec<(&'static str, usize)>,
+    }
+
+    /// One layer and a token-sized vocabulary: the parameter *paths* depend on
+    /// neither, so the comparison runs on a model small enough to build.
     fn one_layer(mut config: MambaVocabNetConfig) -> MambaVocabNetConfig {
-        let MambaVocabNetConfig::Mamba3 {
-            ref mut n_real_layers,
-            ref mut vocab_size,
-            ..
-        } = config
-        else {
-            panic!("expected a Mamba-3 config")
+        let (n_real_layers, vocab_size) = match &mut config {
+            #[cfg(feature = "mamba1")]
+            MambaVocabNetConfig::Mamba1 {
+                n_real_layers,
+                vocab_size,
+                ..
+            } => (n_real_layers, vocab_size),
+            #[cfg(feature = "mamba2")]
+            MambaVocabNetConfig::Mamba2 {
+                n_real_layers,
+                vocab_size,
+                ..
+            } => (n_real_layers, vocab_size),
+            #[cfg(feature = "mamba3")]
+            MambaVocabNetConfig::Mamba3 {
+                n_real_layers,
+                vocab_size,
+                ..
+            } => (n_real_layers, vocab_size),
         };
         *n_real_layers = 1;
-        *vocab_size = 64;
+        *vocab_size = TEST_VOCAB;
         config
     }
 
     /// The checkpoint names, pushed through [`key_remapping`] exactly as
     /// `SafetensorsStore` applies it (every pattern, in order).
-    fn remapped(manifest: Manifest, config: &MambaVocabNetConfig) -> BTreeMap<String, Vec<usize>> {
-        let patterns = burn::store::KeyRemapper::from_patterns(key_remapping(config))
+    ///
+    /// Two names remapping onto one parameter is a panic: the second would
+    /// overwrite the first, leaving whichever lost silently unloaded.
+    fn remapped(manifest: Manifest, config: &MambaVocabNetConfig) -> Remapped {
+        let rules = key_remapping(config);
+        let patterns = burn::store::KeyRemapper::from_patterns(rules.clone())
             .expect("the remapping patterns must compile")
             .to_regex_pairs();
-        manifest
-            .iter()
-            .map(|(name, shape)| {
-                let mut path = name.to_string();
-                for (regex, replacement) in &patterns {
-                    if regex.is_match(&path) {
-                        path = regex.replace_all(&path, replacement.as_str()).to_string();
-                    }
+        let mut rule_hits: Vec<(&'static str, usize)> =
+            rules.iter().map(|(from, _)| (*from, 0)).collect();
+
+        let mut params: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        let mut sources: BTreeMap<String, &'static str> = BTreeMap::new();
+        for (name, shape) in manifest {
+            let mut path = name.to_string();
+            for (index, (regex, replacement)) in patterns.iter().enumerate() {
+                if regex.is_match(&path) {
+                    rule_hits[index].1 += 1;
+                    path = regex.replace_all(&path, replacement.as_str()).to_string();
                 }
-                // `PyTorchToBurnAdapter` transposes `Linear` weights. Inside a
-                // layer every rank-2 tensor is one; `embedding.weight` is the
-                // only rank-2 tensor outside, and is left alone.
-                let shape = if shape.len() == 2 && name.contains(".layers.") {
+            }
+            // `PyTorchToBurnAdapter` transposes `Linear` weights, and inside a
+            // layer a rank-2 `….weight` is exactly one: the norms are rank 1,
+            // `conv1d.weight` rank 3, and the bare `Param`s (`A_log`, `B_bias`,
+            // `mimo_*`) carry no `.weight` suffix. `embedding.weight` is the
+            // only rank-2 weight outside a layer, and is left alone.
+            let shape =
+                if shape.len() == 2 && name.ends_with(".weight") && name.contains(".layers.") {
                     vec![shape[1], shape[0]]
                 } else {
                     shape.to_vec()
                 };
-                (path, shape)
-            })
-            .collect()
+            if let Some(first) = sources.insert(path.clone(), name) {
+                panic!("{first:?} and {name:?} both remap onto {path:?}");
+            }
+            params.insert(path, shape);
+        }
+        Remapped { params, rule_hits }
     }
 
     /// The parameters the built module actually exposes to the store.
@@ -282,35 +404,154 @@ mod tests {
             .collect()
     }
 
-    fn check(manifest: Manifest, config: MambaVocabNetConfig, embedding_rows: usize) {
-        let config = one_layer(config);
-        let mut expected = remapped(manifest, &config);
-        // Restore the shrunken vocabulary for the comparison.
-        assert_eq!(
-            expected.insert("embedding.weight".into(), vec![64, 768]),
-            Some(vec![embedding_rows, 768]),
-            "the embedding must remap to `embedding.weight`"
-        );
+    /// Neither side of the load may hold anything the other does not: every
+    /// checkpoint tensor lands on a parameter, and every parameter is filled.
+    #[test]
+    fn checkpoints_and_modules_hold_the_same_tensors() {
+        for vendored in VENDORED {
+            let id = vendored.spec.id;
+            let full = (vendored.spec.config)();
+            let config = one_layer(full.clone());
+            let mut expected = remapped(vendored.manifest, &config).params;
 
-        let actual = module_params(&config);
-        assert_eq!(
-            expected.keys().collect::<Vec<_>>(),
-            actual.keys().collect::<Vec<_>>(),
-            "every checkpoint tensor must remap onto a module parameter, and \
-             every parameter of a layer must be covered by the checkpoint"
-        );
-        for (path, want) in &expected {
-            assert_eq!(&actual[path], want, "shape mismatch at {path}");
+            // The one shape the shrunken topology cannot be compared against
+            // directly — and the checkpoint's own row count is the check on
+            // `pad_vocab_size_multiple`, which differs between models.
+            let embedding = expected
+                .get_mut("embedding.weight")
+                .unwrap_or_else(|| panic!("{id}: the embedding must remap to `embedding.weight`"));
+            assert_eq!(
+                embedding[0],
+                crate::padded_vocab_size(&full),
+                "{id}: the config's padded vocabulary must match the checkpoint's embedding"
+            );
+            embedding[0] = TEST_VOCAB;
+
+            let actual = module_params(&config);
+            let expected_keys: BTreeSet<&str> = expected.keys().map(String::as_str).collect();
+            let actual_keys: BTreeSet<&str> = actual.keys().map(String::as_str).collect();
+            let dangling: Vec<&str> = expected_keys.difference(&actual_keys).copied().collect();
+            let unfilled: Vec<&str> = actual_keys.difference(&expected_keys).copied().collect();
+            assert!(
+                dangling.is_empty(),
+                "{id}: checkpoint tensor(s) that reach no module parameter: {dangling:?}"
+            );
+            assert!(
+                unfilled.is_empty(),
+                "{id}: module parameter(s) that no checkpoint tensor fills: {unfilled:?}"
+            );
+            for (path, want) in &expected {
+                assert_eq!(&actual[path], want, "{id}: shape mismatch at {path}");
+            }
         }
     }
 
+    /// A rule that rewrites nothing is dead weight in [`key_remapping`] — or,
+    /// worse, a rename that silently stopped matching. This holds for every
+    /// checkpoint with no exception, which is why the MIMO rules are gated on
+    /// `mimo_rank` rather than on the Mamba-3 variant.
     #[test]
-    fn siso_checkpoint_keys_match_the_module() {
-        check(SISO_MANIFEST, crate::hf::mamba3_siso_187m::config(), 128256);
+    fn remapping_rules_all_fire() {
+        for vendored in VENDORED {
+            let id = vendored.spec.id;
+            let config = one_layer((vendored.spec.config)());
+            let unused: Vec<&str> = remapped(vendored.manifest, &config)
+                .rule_hits
+                .into_iter()
+                .filter(|(_, hits)| *hits == 0)
+                .map(|(pattern, _)| pattern)
+                .collect();
+            assert!(
+                unused.is_empty(),
+                "{id}: remapping rule(s) that rewrite nothing: {unused:?}"
+            );
+        }
     }
 
+    /// Confirms each vendored manifest really is its whole checkpoint header:
+    /// the file must hold exactly the manifest's model-level tensors plus one
+    /// copy of layer 0 per layer, at the same shapes. Without this the offline
+    /// checks above only prove that the *transcribed* part of the checkpoint
+    /// loads.
+    ///
+    /// Ignored by default: it reads `model.safetensors` from the same
+    /// `~/.cache/huggingface` a native run uses, **downloading** the ~1.1GB of
+    /// checkpoints that are not already there.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn mimo_checkpoint_keys_match_the_module() {
-        check(MIMO_MANIFEST, crate::hf::mamba3_mimo_187m::config(), 128256);
+    #[ignore = "needs the real model.safetensors of every compiled-in checkpoint"]
+    fn manifests_cover_the_whole_checkpoint() {
+        use crate::hub::{FilePath, Repo, RepoId, RepoType, RevisionPath};
+        use std::io::Read;
+
+        let api = crate::hub::sync::Api::new().expect("a hub client");
+        for vendored in VENDORED {
+            let spec = vendored.spec;
+            let path = api
+                .repo(Repo::with_revision(
+                    RepoId(spec.repo_id.into()),
+                    RepoType::Model,
+                    RevisionPath(spec.revision_path.into()),
+                ))
+                .get(&FilePath(spec.file_path_model_safetensors.into()))
+                .unwrap_or_else(|e| panic!("{}: {e}", spec.id));
+
+            // safetensors: an 8-byte little-endian header length, then that many
+            // bytes of JSON — `name → {dtype, shape, data_offsets}`.
+            let mut file = std::fs::File::open(&path).expect("the cached checkpoint");
+            let mut length = [0u8; 8];
+            file.read_exact(&mut length).expect("a header length");
+            let mut header = vec![0u8; u64::from_le_bytes(length) as usize];
+            file.read_exact(&mut header).expect("a header");
+            let header: BTreeMap<String, serde_json::Value> =
+                serde_json::from_slice(&header).expect("a safetensors header");
+
+            let mut found: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+            for (name, entry) in header {
+                if name == "__metadata__" {
+                    continue;
+                }
+                let shape = entry["shape"]
+                    .as_array()
+                    .expect("a shape")
+                    .iter()
+                    .map(|dim| dim.as_u64().expect("a dimension") as usize)
+                    .collect();
+                found.insert(name, shape);
+            }
+
+            let mut expected: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+            for (name, shape) in vendored.manifest {
+                match name.strip_prefix("backbone.layers.0.") {
+                    Some(rest) => {
+                        for layer in 0..vendored.n_layers {
+                            expected
+                                .insert(format!("backbone.layers.{layer}.{rest}"), shape.to_vec());
+                        }
+                    }
+                    None => {
+                        expected.insert(name.to_string(), shape.to_vec());
+                    }
+                }
+            }
+
+            let expected_keys: BTreeSet<&str> = expected.keys().map(String::as_str).collect();
+            let found_keys: BTreeSet<&str> = found.keys().map(String::as_str).collect();
+            let missing: Vec<&str> = expected_keys.difference(&found_keys).copied().collect();
+            let extra: Vec<&str> = found_keys.difference(&expected_keys).copied().collect();
+            assert!(
+                missing.is_empty(),
+                "{}: the manifest claims tensor(s) the checkpoint does not have: {missing:?}",
+                spec.id
+            );
+            assert!(
+                extra.is_empty(),
+                "{}: the checkpoint holds tensor(s) the manifest does not cover: {extra:?}",
+                spec.id
+            );
+            for (name, want) in &expected {
+                assert_eq!(&found[name], want, "{}: shape mismatch at {name}", spec.id);
+            }
+        }
     }
 }
