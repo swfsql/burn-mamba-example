@@ -205,8 +205,8 @@ CI builds all four Yew bundles on every push to `main` and publishes them to
 
 [`./bench.sh`](bench.sh) times a whole language model per checkpoint in both run
 modes — `forward` (one chunkwise pass over the prompt) and `step` (one recurrent
-decode step) — across three backend builds: flex, CUDA, and CUDA with fusion and
-autotuning. It writes the comparison to [`bench.md`](bench.md).
+decode step) — across three backend configurations: flex, CUDA, and CUDA with
+fusion and autotuning. It writes the comparison to [`bench.md`](bench.md).
 
 ```bash
 ./bench.sh                    # all three configurations
@@ -219,9 +219,23 @@ benchmarking downloads nothing. The cases and the environment knobs live in
 [`benches/model.rs`](benches/model.rs); `cargo bench --bench model` runs a single
 configuration.
 
-Three separate builds are required rather than one: fusion is a compile-time type
-alias inside `burn_cuda::Cuda` (there is no fusion *device* variant), and autotune
-is likewise a compile-time cubecl feature.
+Three configurations, but only **two builds**: `flex` and `cuda` are the same
+binary run with a different `BURN_DEVICE`, since several backends can be compiled
+in at once and the device is a runtime choice. Fusion cannot join them — it is a
+compile-time type alias inside `burn_cuda::Cuda` (there is no fusion *device*
+variant), and autotune is likewise a compile-time cubecl feature.
+
+[`./kernels.sh`](kernels.sh) counts the **GPU kernel launches** each case costs,
+writing [`kernels.md`](kernels.md). Unlike a timing, a launch count follows from
+the op graph rather than the machine, so it is exact and one iteration per case
+is enough; the counts come from cubecl's own per-sync profiling summary. It
+reuses `bench.sh`'s builds, and covers the two CUDA configurations only — flex is
+not a cubecl backend, so it launches no kernels to count.
+
+```bash
+./kernels.sh                  # both configurations, every case
+./kernels.sh step             # only cases matching the criterion filter
+```
 
 ## Example outputs
 

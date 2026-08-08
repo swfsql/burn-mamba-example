@@ -9,22 +9,24 @@
 #
 # Configurations
 # --------------
-#   flex                  backend-flex,backend-simd                        (CPU)
-#   cuda                  backend-cuda                                     (GPU, no fusion, no autotune)
+#   flex                  + backend-cuda, run with BURN_DEVICE=flex        (CPU)
+#   cuda                  + backend-cuda                                   (GPU, no fusion, no autotune)
 #   cuda-fusion-autotune  backend-cuda,backend-fusion,backend-autotune     (GPU, as deployed)
 #
-# Why one build per configuration
-# -------------------------------
-# Fusion is compile-time. `burn_cuda::Cuda` is a *type alias*:
+# Two builds, three configurations
+# --------------------------------
+# `flex` and `cuda` share one build: several backends can be compiled in at once
+# and `BURN_DEVICE` chooses between them at runtime.
+#
+# Fusion, however, is compile-time. `burn_cuda::Cuda` is a *type alias*:
 # `CubeBackend<CudaRuntime>` normally, `Fusion<CubeBackend<CudaRuntime>>` under the
 # `fusion` feature. `DispatchDevice::Cuda` is hard-bound to that alias (there is no
 # fusion *device* variant, unlike autodiff), so the fused build is necessarily a
 # different binary. Autotune is likewise a compile-time cubecl feature — its
-# runtime knobs set the tuning *level* and cache, never "off". Flex then gets its
-# own build simply because it is a different backend feature.
+# runtime knobs set the tuning *level* and cache, never "off".
 #
-# Each configuration keeps its own `CARGO_TARGET_DIR`, so re-running this script
-# rebuilds nothing and the criterion baseline histories stay separate.
+# Each build keeps its own `CARGO_TARGET_DIR`, so re-running this script rebuilds
+# nothing and the criterion baseline histories stay separate.
 #
 # Usage
 # -----
@@ -32,6 +34,9 @@
 #   ./bench.sh step               # only cases matching the criterion filter
 #   BENCH_SEQ=1024 ./bench.sh     # any BENCH_* override the bench understands
 #   BENCH_SKIP=cuda,cuda-fusion-autotune ./bench.sh   # skip configurations by label
+#
+# A skipped configuration is left out of the report rather than carried over
+# from its previous log, which may have been taken at another filter or size.
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -48,11 +53,27 @@ MODELS="mamba1,mamba2,mamba3-siso,mamba3-mimo"
 mkdir -p "$LOG_DIR"
 
 # label | cargo features (on top of the models) | BURN_DEVICE | target dir
+# The first two rows are the same build (same features, same target dir), so it
+# compiles once and is then run on two devices. `backend-simd` rides along for
+# flex's sake; it is a CPU-backend feature and does not touch the CUDA numbers.
 CONFIGS=(
-    "flex|backend-flex,backend-simd|flex|target/bench-flex"
-    "cuda|backend-cuda|cuda|target/bench-cuda"
+    "flex|backend-flex,backend-simd,backend-cuda|flex|target/bench-cuda"
+    "cuda|backend-flex,backend-simd,backend-cuda|cuda|target/bench-cuda"
     "cuda-fusion-autotune|backend-cuda,backend-fusion,backend-autotune|cuda|target/bench-cuda-fusion"
 )
+
+# With both GPU rows skipped there is nothing left to share, so flex goes back to
+# a build of its own — a machine without CUDA can still run
+# `BENCH_SKIP=cuda,cuda-fusion-autotune ./bench.sh`.
+if [[ ",$SKIP," == *",cuda,"* && ",$SKIP," == *",cuda-fusion-autotune,"* ]]; then
+    CONFIGS[0]="flex|backend-flex,backend-simd|flex|target/bench-flex"
+fi
+
+# Only the configurations this invocation actually ran are reported: the log
+# directory may still hold a skipped label's log from an earlier run, taken at a
+# different filter or size, and silently mixing the two would be worse than
+# leaving the column out.
+RAN=()
 
 for entry in "${CONFIGS[@]}"; do
     IFS='|' read -r label features device target <<<"$entry"
@@ -68,15 +89,18 @@ for entry in "${CONFIGS[@]}"; do
         --no-default-features --features "$features,$MODELS" -- \
         --save-baseline "$label" ${FILTER:+"$FILTER"} \
         2>&1 | tee "$LOG_DIR/$label.log"
+
+    RAN+=("$label")
 done
 
 # --------------------------------------------------------------------------
 # Report: parse the criterion output of each run into one table per group.
 # --------------------------------------------------------------------------
-python3 - "$OUT" "$LOG_DIR" <<'PY'
+python3 - "$OUT" "$LOG_DIR" "${RAN[*]:-}" <<'PY'
 import re, sys, datetime, pathlib
 
 out_path, log_dir = sys.argv[1], pathlib.Path(sys.argv[2])
+ran = set(sys.argv[3].split())
 
 # (label, column heading) in report order.
 CONFIGS = [
@@ -114,6 +138,8 @@ def fmt(ms):
 
 results, config_lines, present = {}, {}, []
 for label, _ in CONFIGS:
+    if label not in ran:
+        continue
     log = log_dir / f"{label}.log"
     if not log.exists():
         continue
@@ -127,6 +153,8 @@ for label, _ in CONFIGS:
         results[(m.group("group"), m.group("case"), label)] = ms
 
 cols = [(label, head) for label, head in CONFIGS if label in present]
+if not cols:
+    sys.exit("no run logs found")
 
 lines = [
     "# Benchmark results",

@@ -83,12 +83,12 @@ serde_json = "1.0.145"
 unicode-normalization = "0.1.25"
 
 ### For the main branch. ###
-burn = { git = "https://github.com/tracel-ai/burn.git", rev = "c2ecf30647ba9187b8e6ad54316895ed986c5234", default-features = false, features = [
+burn = { git = "https://github.com/tracel-ai/burn.git", rev = "db95b2c534e38106ee628686ff14064d49c3edec", default-features = false, features = [
     "std",
     "store",
     "safetensors",
 ] }
-burn-mamba = { git = "https://github.com/swfsql/burn-mamba.git", default-features = false, rev = "439e68c4808ae2fc5138f364790f728a864c6514" }
+burn-mamba = { git = "https://github.com/swfsql/burn-mamba.git", default-features = false, rev = "ca649498ee1a0bd02aa3837f181e89071018916e" }
 ### For local development. ###
 # burn = { path = "../burn/crates/burn", default-features = false, features = ["std", "store", "safetensors"] }
 # burn-mamba = { path = "../burn-mamba", default-features = false, features = [] }

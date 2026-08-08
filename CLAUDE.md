@@ -77,11 +77,16 @@ TOKENIZER_JSON=… TOKENIZER_IDS=… cargo test --no-default-features -- --ignor
 
 cargo bench --bench allocations --no-default-features --features "native,backend-flex,backend-simd,mamba2"
 
-# whole-model forward/step timings — three backend builds, writes bench.md; needs no
-# download (real topology, random weights). Optional arg = criterion filter
+# whole-model forward/step timings — three configurations from two builds, writes
+# bench.md; needs no download (real topology, random weights). Optional arg =
+# criterion filter
 ./bench.sh
 BENCH_SEQ=1024 ./bench.sh
 BENCH_SKIP=cuda,cuda-fusion-autotune ./bench.sh step
+
+# per-case kernel-launch counts for the same cases, writes kernels.md
+./kernels.sh
+KERNELS_SKIP=cuda-fusion-autotune ./kernels.sh step
 ```
 
 - Running **downloads the weights** from HF on first use (native: `~/.cache`; wasm:
@@ -168,12 +173,22 @@ benches/model.rs          criterion `forward`/`step` over every `hf::MODELS` ent
                           `Once`-guarded since `configure` refuses a second call. Env:
                           `BENCH_{BATCH,SEQ,SAMPLES,TIME_MS,WARMUP_ITERS,SYNC_EVERY}`
                           (`SYNC_EVERY` defaults to 1 — both run modes end in `into_data`)
-bench.sh                  runs `--bench model` in the three backend feature sets (flex /
-                          cuda / cuda+fusion+autotune), each with its own
-                          `CARGO_TARGET_DIR` + criterion baseline, then parses the logs
-                          into bench.md. Fusion and autotune are compile-time, hence the
-                          separate builds
+bench.sh                  runs `--bench model` in three backend configurations from two
+                          builds — flex and cuda share one (`BURN_DEVICE` picks between
+                          the compiled-in backends), fusion+autotune being compile-time
+                          needs its own — each build with its own `CARGO_TARGET_DIR` +
+                          criterion baseline, then parses the logs into bench.md. Only
+                          the labels this invocation ran are reported; skipping both cuda
+                          rows falls back to a flex-only build
 bench.md                  generated benchmark report (tracked)
+kernels.sh                per-case GPU kernel-launch counts for the two cuda
+                          configurations (flex launches none), reusing bench.sh's builds
+                          and target dirs. Runs the bench binary from a scratch dir
+                          holding a profiling-enabled `cubecl.toml`, under criterion
+                          `--test` with `BENCH_WARMUP_ITERS=1 BENCH_SYNC_EVERY=0` — which
+                          leaves exactly two cubecl summary tables per case, the second
+                          (the lone measured iteration) being the count. Writes kernels.md
+kernels.md                generated kernel-launch report (tracked)
 frontend/{mamba1,mamba2,mamba3-siso,mamba3-mimo}/  index.html + index.js (tracked);
                           `pkg/` = wasm-pack output (ignored)
 .github/workflows/deploy.yml  builds all four wasm bundles on push to main → gh-pages

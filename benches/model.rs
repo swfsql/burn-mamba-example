@@ -42,16 +42,29 @@
 //!   --features "backend-cuda,backend-fusion,backend-autotune,mamba1,mamba2,mamba3-siso,mamba3-mimo"
 //! ```
 //!
-//! [`bench.sh`] drives all three backend configurations and collects the results
-//! into `bench.md`; run it rather than these lines when you want the comparison.
+//! Several backends can be compiled in at once and `BURN_DEVICE` picks one at
+//! runtime, so flex and CUDA are the same binary; only kernel fusion, being
+//! compile-time, needs a build of its own. [`bench.sh`] drives all three
+//! configurations that way — two builds — and collects the results into
+//! `bench.md`; run it rather than these lines when you want the comparison.
+//! [`kernels.sh`] reuses those builds to count kernel launches per case.
 //!
 //! [`bench.sh`]: https://github.com/swfsql/burn-mamba-example/blob/main/bench.sh
+//! [`kernels.sh`]: https://github.com/swfsql/burn-mamba-example/blob/main/kernels.sh
 //!
 //! Every case runs [`warmup_iters`] untimed iterations first, so kernel
 //! compilation and autotuning are finished before criterion measures anything.
 //! Each measured iteration then ends in a device sync ([`timed`]), which is how
 //! generation itself is paced: both run modes read the logits back before they
 //! can issue the next call.
+//!
+//! The model, its input and that warm-up are built inside the closure criterion
+//! only calls for cases that pass its filter, so `-- mamba2` really does touch
+//! nothing else — which is also what lets [`kernels.sh`] attribute kernel
+//! launches to a single case. It counts them by pairing the summary tables
+//! cubecl flushes on each sync, so it runs with `BENCH_WARMUP_ITERS=1` and
+//! `BENCH_SYNC_EVERY=0` to leave exactly two per case: warm-up, then the lone
+//! measured iteration.
 //!
 //! ## Sizing
 //!
