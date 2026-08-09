@@ -83,7 +83,7 @@ cargo test --no-default-features \
 
 cargo bench --bench allocations --no-default-features --features "native,backend-flex,backend-simd,mamba2"
 
-# whole-model forward/step timings — three configurations from two builds, writes
+# whole-model forward/step timings — four configurations from three builds, writes
 # bench.md; needs no download (real topology, random weights). Optional arg =
 # criterion filter
 ./bench.sh
@@ -189,13 +189,16 @@ benches/model.rs          criterion `forward`/`step` over every `hf::MODELS` ent
                           10 iterations cannot fit. Env:
                           `BENCH_{BATCH,SEQ,SAMPLES,BUDGET_MS,WARMUP_ITERS,SYNC_EVERY}`
                           (`SYNC_EVERY` defaults to 1 — both run modes end in `into_data`)
-bench.sh                  runs `--bench model` in three backend configurations from two
-                          builds — flex and cuda share one (`BURN_DEVICE` picks between
-                          the compiled-in backends), fusion+autotune being compile-time
-                          needs its own — each build with its own `CARGO_TARGET_DIR` +
-                          criterion baseline, then parses the logs into bench.md. Only
-                          the labels this invocation ran are reported; skipping both cuda
-                          rows falls back to a flex-only build
+bench.sh                  runs `--bench model` in four configurations from three builds —
+                          flex and cuda share one (`BURN_DEVICE` picks between the
+                          compiled-in backends), fusion+autotune and `flex-native`
+                          (`-C target-cpu=native`) each need their own — every row
+                          pinning `RUSTFLAGS` and keeping its own `CARGO_TARGET_DIR` +
+                          criterion baseline, then parses the logs into bench.md. A
+                          skipped label's previous log is carried over only when its
+                          workload fields and case set match what just ran, and each
+                          column reports its measurement date; skipping both cuda rows
+                          falls back to a flex-only build
 bench.md                  generated benchmark report (tracked)
 kernels.sh                per-case GPU kernel-launch counts for the two cuda
                           configurations (flex launches none), reusing bench.sh's builds

@@ -183,13 +183,37 @@ impl Shape {
                 <burn::backend::Dispatch as burn::backend::Backend>::name(device.as_dispatch());
             eprintln!(
                 "bench-config: batch={batch} sequence={sequence} warmup_iters={} \
-                 budget={:.0?} samples={} backend={backend} models={:?}",
+                 budget={:.0?} samples={} simd={} backend={backend} models={:?}",
                 warmup_iters(),
                 budget(),
                 samples(),
+                simd_level(),
                 hf::ids(),
             );
         });
+    }
+}
+
+/// The widest SIMD ISA this build was *compiled* for — the visible effect of
+/// `-C target-cpu=native`, which is the only axis between [`bench.sh`]'s two CPU
+/// columns. Reported rather than trusted from the environment, since `RUSTFLAGS` is
+/// easy to set and easy to have silently dropped by a stale build.
+///
+/// It says nothing about the CUDA columns: cubecl compiles their kernels for the
+/// device at runtime, so only the host code around them is built for this ISA.
+///
+/// [`bench.sh`]: https://github.com/swfsql/burn-mamba-example/blob/main/bench.sh
+fn simd_level() -> &'static str {
+    if cfg!(target_feature = "avx512f") {
+        "avx512f"
+    } else if cfg!(target_feature = "avx2") {
+        "avx2"
+    } else if cfg!(target_feature = "avx") {
+        "avx"
+    } else if cfg!(target_feature = "sse2") {
+        "sse2"
+    } else {
+        "none"
     }
 }
 

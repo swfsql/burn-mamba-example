@@ -51,8 +51,13 @@
 # kernels to count. Any other cubecl backend works — override the array below,
 # or point BURN_DEVICE/features at wgpu, vulkan, metal, rocm or cpu.
 #
-# The feature sets and target directories are shared with `bench.sh`, so if you
-# have run that, nothing is rebuilt here.
+# The feature sets, target directories and `RUSTFLAGS` are shared with `bench.sh`,
+# so if you have run that, nothing is rebuilt here. The flags have to match: they
+# are part of the build fingerprint, so a row that pinned a different
+# `-C target-cpu` — or none, letting a `.cargo/config.toml` up the tree decide —
+# would rebuild the shared artifacts on every alternation between the two scripts.
+# A launch count is a property of the op graph, so the host ISA cannot change it
+# anyway; the baseline is pinned only to keep the sharing.
 #
 # Usage
 # -----
@@ -74,6 +79,14 @@ SKIP="${KERNELS_SKIP:-}"
 MODELS="mamba1,mamba2,mamba3-siso,mamba3-mimo"
 
 mkdir -p "$LOG_DIR"
+
+# `bench.sh`'s baseline ISA, verbatim — see the note above on why it has to match.
+case "$(uname -m)" in
+    x86_64 | amd64) DEFAULT_BASELINE_CPU="x86-64" ;;
+    *) DEFAULT_BASELINE_CPU="generic" ;;
+esac
+BASELINE_CPU="${BENCH_BASELINE_CPU:-$DEFAULT_BASELINE_CPU}"
+RUSTFLAGS_PIN="-C target-cpu=$BASELINE_CPU"
 
 # cubecl loads the nearest cubecl.toml walking up from the *current directory*,
 # so the runs happen in a scratch dir carrying a profiling-enabled one. That
@@ -108,11 +121,11 @@ for entry in "${CONFIGS[@]}"; do
         continue
     fi
 
-    echo "==> $label — BURN_DEVICE=$device, features: $features,$MODELS"
+    echo "==> $label — BURN_DEVICE=$device, RUSTFLAGS='$RUSTFLAGS_PIN', features: $features,$MODELS"
 
     # Build, then locate the binary: it has to be run from the scratch dir, and
     # `cargo bench` would run it from the package root instead.
-    bin=$(CARGO_TARGET_DIR="$target" \
+    bin=$(CARGO_TARGET_DIR="$target" RUSTFLAGS="$RUSTFLAGS_PIN" \
         cargo bench --bench model \
         --no-default-features --features "$features,$MODELS" \
         --no-run --message-format=json 2>/dev/null |
