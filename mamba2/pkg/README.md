@@ -205,25 +205,43 @@ CI builds all four Yew bundles on every push to `main` and publishes them to
 
 [`./bench.sh`](bench.sh) times a whole language model per checkpoint in both run
 modes — `forward` (one chunkwise pass over the prompt) and `step` (one recurrent
-decode step) — across three backend configurations: flex, CUDA, and CUDA with
-fusion and autotuning. It writes the comparison to [`bench.md`](bench.md).
+decode step) — across four configurations: flex, flex compiled with
+`-C target-cpu=native`, CUDA, and CUDA with fusion and autotuning. It writes the
+comparison to [`bench.md`](bench.md).
 
 ```bash
-./bench.sh                    # all three configurations
-./bench.sh step               # only cases matching the criterion filter
-BENCH_SEQ=1024 ./bench.sh     # input sizing knobs
+./bench.sh                        # all four configurations
+./bench.sh step                   # only cases matching the criterion filter
+BENCH_SEQ=1024 ./bench.sh         # input sizing knobs
+BENCH_BUDGET_MS=20000 ./bench.sh  # shorten the per-case measurement cap
+BENCH_SKIP=cuda,cuda-fusion-autotune ./bench.sh   # the CPU columns only
 ```
+
+A configuration this invocation skipped keeps its column from its previous run, but
+only when that run was about the same workload and the same cases; `bench.md` names
+each column's measurement date.
 
 The models are built with the checkpoints' **exact topology on random weights**, so
 benchmarking downloads nothing. The cases and the environment knobs live in
 [`benches/model.rs`](benches/model.rs); `cargo bench --bench model` runs a single
 configuration.
 
-Three configurations, but only **two builds**: `flex` and `cuda` are the same
+Every case is **capped at a minute** of measurement (`BENCH_BUDGET_MS`): after the
+warm-up the bench times one iteration and plans from it, taking between 10 and 100
+— so a slow case buys fewer samples rather than a longer run, and the *workload*
+is never shrunk to fit. One iteration costing more than a tenth of the budget is
+the one thing the cap cannot help with, since criterion takes no fewer than ten
+samples; those cases are logged as `over-budget`.
+
+Four configurations, but only **three builds**: `flex` and `cuda` are the same
 binary run with a different `BURN_DEVICE`, since several backends can be compiled
 in at once and the device is a runtime choice. Fusion cannot join them — it is a
 compile-time type alias inside `burn_cuda::Cuda` (there is no fusion *device*
-variant), and autotune is likewise a compile-time cubecl feature.
+variant), and autotune is likewise a compile-time cubecl feature. `flex-native` is
+its own build for the same reason: `RUSTFLAGS` is part of the build fingerprint.
+Every row pins `-C target-cpu` (the baseline ISA, or `native` for that one), so no
+ambient `.cargo/config.toml` can leak into a column, and the `simd=` field of each
+column's configuration line says which ISA it really got.
 
 [`./kernels.sh`](kernels.sh) counts the **GPU kernel launches** each case costs,
 writing [`kernels.md`](kernels.md). Unlike a timing, a launch count follows from
