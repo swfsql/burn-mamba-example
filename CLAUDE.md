@@ -177,10 +177,17 @@ benches/allocations.rs    divan AllocProfiler around `native::main()` (`required
                           = `native`)
 benches/model.rs          criterion `forward`/`step` over every `hf::MODELS` entry: the
                           checkpoint's own `config()`/`ssd_path()` on random weights, plus
-                          `tie_lm_head`. One model at a time, built *inside* the bench
-                          closure (criterion skips it when filtered out); `device()` is
-                          `Once`-guarded since `configure` refuses a second call. Env:
-                          `BENCH_{BATCH,SEQ,SAMPLES,TIME_MS,WARMUP_ITERS,SYNC_EVERY}`
+                          `tie_lm_head`. One model per checkpoint, shared by both groups,
+                          built lazily *inside* the bench closure on criterion's first call
+                          (skipped when filtered out, not rebuilt per sample); `device()` is
+                          `Once`-guarded since `configure` refuses a second call. `Plan`
+                          caps each case at `BENCH_BUDGET_MS` (60s) of measurement: criterion
+                          is pinned to the least it does (10 flat samples, 1ms times, so its
+                          warm-up call is the *probe*) and `timed` runs
+                          `Plan::iters_per_sample` real iterations per asked one, reporting
+                          their mean; a `bench-plan` line per case says `over-budget` when
+                          10 iterations cannot fit. Env:
+                          `BENCH_{BATCH,SEQ,SAMPLES,BUDGET_MS,WARMUP_ITERS,SYNC_EVERY}`
                           (`SYNC_EVERY` defaults to 1 — both run modes end in `into_data`)
 bench.sh                  runs `--bench model` in three backend configurations from two
                           builds — flex and cuda share one (`BURN_DEVICE` picks between

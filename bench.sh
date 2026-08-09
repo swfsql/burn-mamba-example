@@ -30,10 +30,19 @@
 #
 # Usage
 # -----
-#   ./bench.sh                    # all three configurations
-#   ./bench.sh step               # only cases matching the criterion filter
-#   BENCH_SEQ=1024 ./bench.sh     # any BENCH_* override the bench understands
+#   ./bench.sh                        # all three configurations
+#   ./bench.sh step                   # only cases matching the criterion filter
+#   BENCH_SEQ=1024 ./bench.sh         # any BENCH_* override the bench understands
+#   BENCH_BUDGET_MS=20000 ./bench.sh  # shorten the per-case measurement cap
 #   BENCH_SKIP=cuda,cuda-fusion-autotune ./bench.sh   # skip configurations by label
+#
+# Each case measures for at most `BENCH_BUDGET_MS` (default 60s) — the bench times
+# one iteration after the warm-up and plans from it, taking between 10 and 100 of
+# them — so a whole run is at worst `configurations × cases × 1 minute`, plus the
+# builds. Raising `BENCH_SEQ` does not extend that; it buys fewer samples of a
+# longer iteration, until one iteration alone exceeds a tenth of the budget and
+# the bench starts reporting `over-budget` (criterion cannot take fewer than 10
+# samples). The dfdx sibling's bench.sh is capped the same way, on purpose.
 #
 # A skipped configuration is left out of the report rather than carried over
 # from its previous log, which may have been taken at another filter or size.
@@ -172,6 +181,14 @@ lines = [
     "`step` is decode latency: at `batch=1` its reciprocal is the token/s a "
     "sequential run sustains. `forward` is one pass over the whole `sequence`, "
     "so divide by the token count for per-token prefill cost.",
+    "",
+    "Each case is capped: after the warm-up the bench times a single iteration, "
+    "then measures between 10 and 100 of them — as many as fit in `budget` below, "
+    "which the warm-up and that probe sit outside of. A case whose single "
+    "iteration costs more than a tenth of the budget cannot be capped, since "
+    "criterion takes no fewer than ten samples; its plan line in the run log says "
+    "`over-budget`. Read the slow rows as the right order of magnitude, not to "
+    "three digits.",
     "",
 ]
 

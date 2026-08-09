@@ -18,8 +18,11 @@
 # The runs below force `BENCH_SYNC_EVERY=0` and `BENCH_WARMUP_ITERS=1`, which
 # makes `benches/model.rs` sync exactly twice per case under `--test`: once after
 # the warm-up loop (model construction + one iteration) and once at the end of
-# `timed()` (the measured iteration, alone). So each case emits a *pair* of
-# tables and the second of each pair is its per-iteration launch count. (The
+# `timed()` (the measured iteration, alone). `--test` takes one sample and skips
+# criterion's warm-up, which is where the bench would otherwise probe and plan a
+# budgeted run, so that measured iteration really is a lone one. Each case
+# therefore emits a *pair* of tables and the second of each pair is its
+# per-iteration launch count. (The
 # bench's own default is `BENCH_SYNC_EVERY=1` — a sync per iteration, mirroring
 # how generation paces itself — which would split the measured iteration's
 # launches across two tables.)

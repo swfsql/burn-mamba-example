@@ -209,15 +209,23 @@ decode step) — across three backend configurations: flex, CUDA, and CUDA with
 fusion and autotuning. It writes the comparison to [`bench.md`](bench.md).
 
 ```bash
-./bench.sh                    # all three configurations
-./bench.sh step               # only cases matching the criterion filter
-BENCH_SEQ=1024 ./bench.sh     # input sizing knobs
+./bench.sh                        # all three configurations
+./bench.sh step                   # only cases matching the criterion filter
+BENCH_SEQ=1024 ./bench.sh         # input sizing knobs
+BENCH_BUDGET_MS=20000 ./bench.sh  # shorten the per-case measurement cap
 ```
 
 The models are built with the checkpoints' **exact topology on random weights**, so
 benchmarking downloads nothing. The cases and the environment knobs live in
 [`benches/model.rs`](benches/model.rs); `cargo bench --bench model` runs a single
 configuration.
+
+Every case is **capped at a minute** of measurement (`BENCH_BUDGET_MS`): after the
+warm-up the bench times one iteration and plans from it, taking between 10 and 100
+— so a slow case buys fewer samples rather than a longer run, and the *workload*
+is never shrunk to fit. One iteration costing more than a tenth of the budget is
+the one thing the cap cannot help with, since criterion takes no fewer than ten
+samples; those cases are logged as `over-budget`.
 
 Three configurations, but only **two builds**: `flex` and `cuda` are the same
 binary run with a different `BURN_DEVICE`, since several backends can be compiled
