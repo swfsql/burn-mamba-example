@@ -492,7 +492,7 @@ impl MambaWrapper {
             let input = input.unsqueeze();
 
             let ssd_path = (self.spec.ssd_path)();
-            let (logits_list, _caches) = self.mamba.forward(input, None, ssd_path);
+            let (logits_list, _caches) = self.mamba.forward(input, None, ssd_path, None);
             if i == 0 {
                 instant = Some(std::time::Instant::now());
             }
@@ -591,7 +591,7 @@ impl MambaWrapper {
         let device = device(&self.mamba);
         let input = Tensor::from_data([input], &device);
 
-        let (logits, new_caches) = self.mamba.step(input, caches, None, None);
+        let (logits, new_caches) = self.mamba.step(input, caches, None);
         assert_eq!([1, self.padded_vocab_size()], logits.dims());
 
         let logits = logits

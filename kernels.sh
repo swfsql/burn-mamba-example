@@ -16,16 +16,25 @@
 # every cubecl backend, not just CUDA.
 #
 # The runs below force `BENCH_SYNC_EVERY=0` and `BENCH_WARMUP_ITERS=1`, which
-# makes `benches/model.rs` sync exactly twice per case under `--test`: once after
-# the warm-up loop (model construction + one iteration) and once at the end of
+# makes `benches/model.rs` sync twice per case under `--test`: once after the
+# warm-up loop (model construction + one iteration) and once at the end of
 # `timed()` (the measured iteration, alone). `--test` takes one sample and skips
 # criterion's warm-up, which is where the bench would otherwise probe and plan a
-# budgeted run, so that measured iteration really is a lone one. Each case
-# therefore emits a *pair* of tables and the second of each pair is its
-# per-iteration launch count. (The
+# budgeted run, so that measured iteration really is a lone one. Its table is
+# therefore the **last** one the case emits, which is what the report reads. (The
 # bench's own default is `BENCH_SYNC_EVERY=1` — a sync per iteration, mirroring
 # how generation paces itself — which would split the measured iteration's
 # launches across two tables.)
+#
+# Only the last table is pinned down, not the count: autotune syncs once per
+# candidate it benchmarks, so a case that tunes emits a table (usually of one
+# kernel) for each of them before its two. Tables are attributed to the case
+# criterion last announced with a `Testing <case>` line.
+#
+# cubecl logs from a detached task, so the tables lag the benchmark that produced
+# them — far enough that the last case's could be cut off mid-line by the process
+# exiting. `BENCH_LOG_DRAIN_MS` (below) is the pause `timed()` takes after each
+# case to let the logger catch up; raise it if the parser reports a truncated log.
 #
 # One run is enough
 # -----------------
@@ -39,8 +48,8 @@
 # Two consequences of the `basic` level are worth knowing: it times every launch
 # with `submit_blocking`, which serialises the queue (trust the counts, never
 # the wall-clock, from this run), and autotuning launches each candidate, which
-# is why the *second* table of each pair is the one read — by then the tuner has
-# settled.
+# is another reason the *last* table of a case is the one read — by then the
+# tuner has settled.
 #
 # Configurations
 # --------------
@@ -65,6 +74,7 @@
 #   ./kernels.sh step               # only cases matching the criterion filter
 #   BENCH_SEQ=1024 ./kernels.sh     # any BENCH_* the bench understands
 #   KERNELS_SKIP=cuda-fusion-autotune ./kernels.sh   # skip configurations by label
+#   KERNELS_DRAIN_MS=3000 ./kernels.sh               # give the logger longer to drain
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -73,6 +83,7 @@ OUT="${KERNELS_OUT:-kernels.md}"
 LOG_DIR="${KERNELS_LOG_DIR:-target/kernel-logs}"
 FILTER="${1:-}"
 SKIP="${KERNELS_SKIP:-}"
+DRAIN_MS="${KERNELS_DRAIN_MS:-2000}"
 
 # Every checkpoint this repo knows about, in one binary; the bench iterates
 # `hf::MODELS`, so this is what decides the report's rows.
@@ -141,13 +152,13 @@ for line in sys.stdin:
         exit 1
     fi
 
-    # The case list in the order criterion will run them, so the table pairs can
-    # be attributed without hardcoding the cases here.
+    # The case list in the order criterion will run them, so its tables can be
+    # attributed without hardcoding the cases here.
     ( cd "$WORK" && BURN_DEVICE="$device" "$bin" --list ${FILTER:+"$FILTER"} ) \
         2>/dev/null | sed -n 's/: benchmark$//p' >"$LOG_DIR/$label.cases"
 
     ( cd "$WORK" && BURN_DEVICE="$device" \
-        BENCH_WARMUP_ITERS=1 BENCH_SYNC_EVERY=0 \
+        BENCH_WARMUP_ITERS=1 BENCH_SYNC_EVERY=0 BENCH_LOG_DRAIN_MS="$DRAIN_MS" \
         "$bin" --test ${FILTER:+"$FILTER"} ) >"$LOG_DIR/$label.log" 2>&1
 
     RAN+=("$label")
@@ -178,7 +189,12 @@ GROUP_TITLES = {
 
 # The `| Total | <duration> | <num computed> | <ratio> |` line closing a table.
 # Kernel names contain `|` themselves, so fields are counted from the right.
-TOTAL = re.compile(r"^\| Total\s+\|.*?\|\s*(\d+)\s*\|\s*\d+ %\s*\|", re.M)
+# Unanchored: the logger and criterion write to the same stdout from different
+# threads, so a line can start with the tail of another one.
+TOTAL = re.compile(r"\| Total\s+\|.*?\|\s*(\d+)\s*\|\s*\d+ %\s*\|")
+# The first line of a table, used only to catch a run whose last table was cut
+# off by the process exiting before the detached logger had written it.
+TABLE_OPEN = re.compile(r"\|\u23ba")
 
 results, config_lines, present = {}, {}, []
 for label, _ in CONFIGS:
@@ -189,24 +205,47 @@ for label, _ in CONFIGS:
         continue
     text = log.read_text(errors="replace")
     cases = cases_file.read_text().split()
-    counts = [int(m.group(1)) for m in TOTAL.finditer(text)]
 
-    if len(counts) != 2 * len(cases):
+    # Attribute each table to the case criterion last announced. A case emits at
+    # least two — the warm-up's and the measured iteration's — and one more per
+    # autotune candidate, all of them before the measured one, so the last table
+    # of a case is the count wanted.
+    seen, current = {case: [] for case in cases}, None
+    for line in text.splitlines():
+        for case in cases:
+            if f"Testing {case}" in line:
+                current = case
+                break
+        m = TOTAL.search(line)
+        if m and current is not None:
+            seen[current].append(int(m.group(1)))
+
+    # cubecl writes the tables from a detached task, so the last one can be cut
+    # off mid-line when the process exits. That loses the measured count while
+    # leaving the warm-up's in place, which would be read as the answer.
+    tail = text[text.rindex("| Total"):]
+    if TABLE_OPEN.search(tail):
         sys.exit(
-            f"{label}: expected {2 * len(cases)} summary tables for "
-            f"{len(cases)} cases, found {len(counts)} — the sync points in "
-            f"benches/model.rs changed; see {log}"
+            f"{label}: the log ends inside a summary table, so the last case's "
+            f"count was lost — re-run with a larger KERNELS_DRAIN_MS; see {log}"
+        )
+
+    missing = [case for case in cases if len(seen[case]) < 2]
+    if missing:
+        sys.exit(
+            f"{label}: {', '.join(missing)} left fewer than the two summary "
+            f"tables a case must emit (warm-up, then the measured iteration) — "
+            f"the sync points in benches/model.rs changed, or the logger did not "
+            f"drain; see {log}"
         )
 
     present.append(label)
     for m in re.finditer(r"^bench-config: (.*)$", text, re.M):
         config_lines[label] = m.group(1)
         break
-    # Pairs are (model init + warm-up iteration, measured iteration); the
-    # second is the clean per-iteration count.
-    for case, measured in zip(cases, counts[1::2]):
+    for case in cases:
         group, _, name = case.partition("/")
-        results[(group, name, label)] = measured
+        results[(group, name, label)] = seen[case][-1]
 
 cols = [(label, head) for label, head in CONFIGS if label in present]
 if not cols:

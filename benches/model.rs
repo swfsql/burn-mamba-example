@@ -88,17 +88,20 @@
 //! input and the warm-up are built there on the first call and kept for the rest
 //! — lazily, which is also what keeps a filtered run (`-- mamba2`) from building
 //! or warming up anything else. That is what lets [`kernels.sh`] attribute kernel
-//! launches to a single case: it counts them by pairing the summary tables cubecl
-//! flushes on each sync, running with `BENCH_WARMUP_ITERS=1` and
-//! `BENCH_SYNC_EVERY=0` under criterion's `--test` mode — which takes one sample
-//! and no warm-up, hence no probe, leaving exactly two tables per case: the
-//! warm-up, then the lone measured iteration.
+//! launches to a single case: it reads the summary tables cubecl flushes on each
+//! sync, running with `BENCH_WARMUP_ITERS=1` and `BENCH_SYNC_EVERY=0` under
+//! criterion's `--test` mode — which takes one sample and no warm-up, hence no
+//! probe, so the *last* table a case emits is its lone measured iteration.
+//! (Earlier tables are the warm-up's, plus one per autotune candidate.) Those
+//! tables are written by a detached logger task that lags the benchmark, so that
+//! run also sets `BENCH_LOG_DRAIN_MS` — see [`timed`].
 //!
 //! ## Sizing
 //!
 //! The topology is the checkpoint's, so the free knobs are the input shape
 //! (`BENCH_BATCH`, `BENCH_SEQ`), the budget (`BENCH_BUDGET_MS`) and the sample
-//! count `BENCH_SAMPLES` / drain policy `BENCH_WARMUP_ITERS`, `BENCH_SYNC_EVERY`.
+//! count `BENCH_SAMPLES` / drain policy `BENCH_WARMUP_ITERS`, `BENCH_SYNC_EVERY`
+//! (plus `BENCH_LOG_DRAIN_MS`, which only `kernels.sh` needs).
 //! The defaults are the app's own regime — a single stream (`batch=1`) over a
 //! short prompt.
 //!
@@ -313,6 +316,18 @@ fn timed<T>(device: &Device, plan: &Plan, iters: u64, mut work: impl FnMut() -> 
 
     let per_iter = start.elapsed().div_f64(done as f64);
     plan.observe(per_iter);
+
+    // cubecl logs profiling on a detached task, so `sync` returns while the
+    // summary table for what just ran is still queued behind it. `kernels.sh`
+    // reads those tables and needs each case's to land before the next case
+    // starts — and the last case's to land at all, rather than be cut off when
+    // the process exits mid-flush. `BENCH_LOG_DRAIN_MS` is the pause that lets
+    // the logger catch up; it sits outside the timing, and is off by default.
+    let drain = env_usize("BENCH_LOG_DRAIN_MS", 0) as u64;
+    if drain > 0 {
+        std::thread::sleep(Duration::from_millis(drain));
+    }
+
     per_iter.mul_f64(iters as f64)
 }
 
@@ -534,7 +549,7 @@ fn bench_forward(
             let x = input_ids(shape, spec, device);
             // Untimed: compile (and autotune) the kernels this model needs.
             for _ in 0..warmup_iters() {
-                let (_y, _caches) = mamba.forward(x.clone(), None, ssd_path.clone());
+                let (_y, _caches) = mamba.forward(x.clone(), None, ssd_path.clone(), None);
                 sync(device);
             }
             x
@@ -542,7 +557,7 @@ fn bench_forward(
 
         b.iter_custom(|iters| {
             timed(device, &plan, iters, || {
-                let (y, _caches) = mamba.forward(x.clone(), None, ssd_path.clone());
+                let (y, _caches) = mamba.forward(x.clone(), None, ssd_path.clone(), None);
                 y
             })
         })
@@ -580,7 +595,7 @@ fn bench_step(
             // decode would (the steady state is what the measurements then see,
             // and the cache keeps advancing across samples from here).
             for _ in 0..warmup_iters() {
-                let (_y, next) = mamba.step(x.clone(), caches.take(), None, None);
+                let (_y, next) = mamba.step(x.clone(), caches.take(), None);
                 caches = Some(next);
                 sync(device);
             }
@@ -588,7 +603,7 @@ fn bench_step(
 
         b.iter_custom(|iters| {
             timed(device, &plan, iters, || {
-                let (y, next) = mamba.step(x.clone(), caches.take(), None, None);
+                let (y, next) = mamba.step(x.clone(), caches.take(), None);
                 caches = Some(next);
                 y
             })

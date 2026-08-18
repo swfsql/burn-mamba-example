@@ -1,6 +1,6 @@
 # Benchmark results
 
-One whole language model per case — the pretrained checkpoints' exact topology on random weights — assembled by `./bench.sh` on 2026-08-09 from each configuration's most recent run (`measured`, below). Each cell is criterion's median wall-clock time per iteration; lower is better.
+One whole language model per case — the pretrained checkpoints' exact topology on random weights — assembled by `./bench.sh` on 2026-08-18 from each configuration's most recent run (`measured`, below). Each cell is criterion's median wall-clock time per iteration; lower is better.
 
 Every measured iteration ends in a device sync, as generation itself does (both run modes read the logits back before issuing the next call), and each case runs untimed warm-up iterations first so kernel compilation and autotuning stay out of the samples.
 
@@ -10,25 +10,25 @@ Each case is capped: after the warm-up the bench times a single iteration, then 
 
 | run | measured | configuration |
 |---|---|---|
-| `flex` | 2026-08-09 06:21 | `batch=1 sequence=256 warmup_iters=2 budget=60s samples=10 simd=sse2 backend=dispatch<flex> models=["mamba3-mimo", "mamba3-siso", "mamba2", "mamba1"]` |
-| `flex-native` | 2026-08-09 06:31 | `batch=1 sequence=256 warmup_iters=2 budget=60s samples=10 simd=avx2 backend=dispatch<flex> models=["mamba3-mimo", "mamba3-siso", "mamba2", "mamba1"]` |
-| `cuda` | 2026-08-09 05:44 | `batch=1 sequence=256 warmup_iters=2 budget=60s samples=10 backend=dispatch<cubecl<cuda>> models=["mamba3-mimo", "mamba3-siso", "mamba2", "mamba1"]` |
-| `cuda-fusion-autotune` | 2026-08-09 05:47 | `batch=1 sequence=256 warmup_iters=2 budget=60s samples=10 backend=dispatch<fusion<cubecl<cuda>>> models=["mamba3-mimo", "mamba3-siso", "mamba2", "mamba1"]` |
+| `flex` | 2026-08-18 20:04 | `batch=1 sequence=256 warmup_iters=2 budget=60s samples=10 simd=sse2 backend=dispatch<flex> models=["mamba3-mimo", "mamba3-siso", "mamba2", "mamba1"]` |
+| `flex-native` | 2026-08-18 20:11 | `batch=1 sequence=256 warmup_iters=2 budget=60s samples=10 simd=avx2 backend=dispatch<flex> models=["mamba3-mimo", "mamba3-siso", "mamba2", "mamba1"]` |
+| `cuda` | 2026-08-18 20:14 | `batch=1 sequence=256 warmup_iters=2 budget=60s samples=10 simd=sse2 backend=dispatch<cubecl<cuda>> models=["mamba3-mimo", "mamba3-siso", "mamba2", "mamba1"]` |
+| `cuda-fusion-autotune` | 2026-08-18 20:28 | `batch=1 sequence=256 warmup_iters=2 budget=60s samples=10 simd=sse2 backend=dispatch<fusion<cubecl<cuda>>> models=["mamba3-mimo", "mamba3-siso", "mamba2", "mamba1"]` |
 
 ## `forward` — one chunkwise pass over the whole prompt (`run_parallel`)
 
 | case | flex (CPU) | flex + `target-cpu=native` | cuda | cuda + fusion + autotune |
 |---|---|---|---|---|
-| `mamba1` | 9.04 s | 9.44 s | 631.80 ms | 963.84 ms |
-| `mamba2` | 3.91 s | 4.03 s | 81.54 ms | 67.17 ms |
-| `mamba3-siso` | 4.20 s | 4.16 s | 75.50 ms | 70.73 ms |
-| `mamba3-mimo` | 11.23 s | 11.97 s | 280.92 ms | 137.58 ms |
+| `mamba1` | 3.68 s | 3.89 s | 610.81 ms | 1.05 s |
+| `mamba2` | 2.63 s | 2.50 s | 77.97 ms | 71.96 ms |
+| `mamba3-siso` | 3.30 s | 3.08 s | 74.30 ms | 70.82 ms |
+| `mamba3-mimo` | 4.72 s | 4.54 s | 271.58 ms | 135.22 ms |
 
 ## `step` — one recurrent decode step (`run_sequential`)
 
 | case | flex (CPU) | flex + `target-cpu=native` | cuda | cuda + fusion + autotune |
 |---|---|---|---|---|
-| `mamba1` | 54.77 ms | 55.37 ms | 22.14 ms | 19.31 ms |
-| `mamba2` | 197.11 ms | 219.79 ms | 23.85 ms | 23.15 ms |
-| `mamba3-siso` | 96.58 ms | 95.22 ms | 18.27 ms | 27.77 ms |
-| `mamba3-mimo` | 108.21 ms | 117.61 ms | 23.00 ms | 30.79 ms |
+| `mamba1` | 44.39 ms | 48.11 ms | 20.84 ms | 22.47 ms |
+| `mamba2` | 47.45 ms | 48.04 ms | 19.02 ms | 25.13 ms |
+| `mamba3-siso` | 64.21 ms | 55.64 ms | 28.95 ms | 31.78 ms |
+| `mamba3-mimo` | 68.64 ms | 62.06 ms | 29.86 ms | 30.40 ms |
