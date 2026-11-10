@@ -8,19 +8,19 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly wasm_main: () => any;
-    readonly wasm_bindgen_a482b892352aaa51___convert__closures_____invoke___wasm_bindgen_a482b892352aaa51___JsValue__core_a3ec38916382e44___result__Result_____wasm_bindgen_a482b892352aaa51___JsError___true_: (a: number, b: number, c: any) => [number, number];
-    readonly wasm_bindgen_a482b892352aaa51___convert__closures_____invoke___web_sys_3730bf19d068f92a___features__gen_IdbVersionChangeEvent__IdbVersionChangeEvent__core_a3ec38916382e44___result__Result_____wasm_bindgen_a482b892352aaa51___JsValue___true_: (a: number, b: number, c: any) => [number, number];
-    readonly wasm_bindgen_a482b892352aaa51___convert__closures_____invoke___js_sys_5f560605400c79f2___Function_fn_wasm_bindgen_a482b892352aaa51___JsValue_____wasm_bindgen_a482b892352aaa51___sys__Undefined___js_sys_5f560605400c79f2___Function_fn_wasm_bindgen_a482b892352aaa51___JsValue_____wasm_bindgen_a482b892352aaa51___sys__Undefined_______true_: (a: number, b: number, c: any, d: any) => void;
-    readonly wasm_bindgen_a482b892352aaa51___convert__closures_____invoke___web_sys_3730bf19d068f92a___features__gen_Event__Event______true_: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen_a482b892352aaa51___convert__closures________invoke___web_sys_3730bf19d068f92a___features__gen_Event__Event______true_: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen_a482b892352aaa51___convert__closures_____invoke_______true__1_: (a: number, b: number) => void;
-    readonly wasm_bindgen_a482b892352aaa51___convert__closures_____invoke_______true_: (a: number, b: number) => void;
+    readonly wasm_bindgen_1bbdc0fda135d508___convert__closures_____invoke___js_sys_9c69062221850e91___Function_fn_wasm_bindgen_1bbdc0fda135d508___JsValue_____wasm_bindgen_1bbdc0fda135d508___sys__Undefined___js_sys_9c69062221850e91___Function_fn_wasm_bindgen_1bbdc0fda135d508___JsValue_____wasm_bindgen_1bbdc0fda135d508___sys__Undefined_______true_: (a: number, b: number, c: any, d: any) => void;
+    readonly wasm_bindgen_1bbdc0fda135d508___convert__closures_____invoke___wasm_bindgen_1bbdc0fda135d508___JsValue__core_8592b7f1da481f01___result__Result_____wasm_bindgen_1bbdc0fda135d508___JsError___true_: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen_1bbdc0fda135d508___convert__closures_____invoke___web_sys_3c151ab3f3a09a43___features__gen_IdbVersionChangeEvent__IdbVersionChangeEvent__core_8592b7f1da481f01___result__Result_____wasm_bindgen_1bbdc0fda135d508___JsValue___true_: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen_1bbdc0fda135d508___convert__closures________invoke___web_sys_3c151ab3f3a09a43___features__gen_Event__Event______true_: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_1bbdc0fda135d508___convert__closures_____invoke___web_sys_3c151ab3f3a09a43___features__gen_Event__Event______true_: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_1bbdc0fda135d508___convert__closures_____invoke_______true_: (a: number, b: number) => void;
+    readonly wasm_bindgen_1bbdc0fda135d508___convert__closures_____invoke_______true__1_: (a: number, b: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __externref_drop_slice: (a: number, b: number) => void;
     readonly __wbindgen_destroy_closure: (a: number, b: number) => void;
     readonly __externref_table_dealloc: (a: number) => void;
