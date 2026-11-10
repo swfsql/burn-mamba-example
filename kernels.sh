@@ -135,17 +135,25 @@ for entry in "${CONFIGS[@]}"; do
     echo "==> $label — BURN_DEVICE=$device, RUSTFLAGS='$RUSTFLAGS_PIN', features: $features,$MODELS"
 
     # Build, then locate the binary: it has to be run from the scratch dir, and
-    # `cargo bench` would run it from the package root instead.
-    bin=$(CARGO_TARGET_DIR="$target" RUSTFLAGS="$RUSTFLAGS_PIN" \
+    # `cargo bench` would run it from the package root instead. With
+    # `--message-format=json`, cargo writes its progress and its summary to
+    # stderr, but each rustc or linker diagnostic to stdout as JSON. So the
+    # filter writes the rendered text of each diagnostic to stderr.
+    if ! bin=$(CARGO_TARGET_DIR="$target" RUSTFLAGS="$RUSTFLAGS_PIN" \
         cargo bench --bench model \
         --no-default-features --features "$features,$MODELS" \
-        --no-run --message-format=json 2>/dev/null |
+        --no-run --message-format=json |
         python3 -c 'import json,sys
 for line in sys.stdin:
     try: m = json.loads(line)
     except ValueError: continue
-    if m.get("executable") and m.get("target", {}).get("name") == "model":
-        print(m["executable"])' | tail -1)
+    if m.get("reason") == "compiler-message":
+        sys.stderr.write(m["message"].get("rendered") or "")
+    elif m.get("executable") and m.get("target", {}).get("name") == "model":
+        print(m["executable"])' | tail -1); then
+        echo "    the build of $label failed (the output of cargo is above)" >&2
+        exit 1
+    fi
 
     if [[ -z "$bin" ]]; then
         echo "    could not locate the compiled bench binary" >&2

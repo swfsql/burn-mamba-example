@@ -124,9 +124,14 @@ features. Its build is probably the same, but no one ran it.
   call `try_to_vec`, which the deprecation note gives. The deprecated `to_vec`
   only calls `try_to_vec`, so the result does not change. The bench does not
   call these two methods.
-- **Note:** `kernels.sh` sends the output of cargo to `/dev/null`. A build
-  failure then shows only "could not locate the compiled bench binary". This
-  ticket does not change that.
+- **The build output of `kernels.sh`:** it sent the stderr of cargo to
+  `/dev/null`, and its JSON filter dropped each rustc and linker diagnostic.
+  Under `set -euo pipefail`, a failed build then stopped the script with no
+  message. Now cargo's stderr shows, the filter writes the rendered text of
+  each diagnostic to stderr, and a failed build prints "the build of <label>
+  failed". A test ran the build step of the script on a crate with a type
+  error: the old script printed nothing, and the new one printed the rustc
+  error. A build that succeeds still finds the same binary.
 - **Reports:** the user regenerated `bench.md` and `kernels.md` on 2026-11-10,
   with the `powersave` governor. The `## Comments` of ticket 02 give the
   result. `.scratch/bench-host-info/` records the host of each run in the
