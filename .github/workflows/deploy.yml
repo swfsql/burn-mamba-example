@@ -21,6 +21,11 @@ jobs:
         steps:
             - uses: actions/checkout@v4
 
+            # The native steps of the check use stable. The nightly install below
+            # stays the default toolchain, so wasm-pack uses nightly.
+            - name: Install stable (for the native steps of the check)
+              uses: dtolnay/rust-toolchain@stable
+
             # rust compiler for creating binaries
             - name: Install latest nightly (for wasm)
               uses: dtolnay/rust-toolchain@nightly
@@ -35,6 +40,13 @@ jobs:
 
             # Runs some Rust-related caching
             - uses: Swatinem/rust-cache@v2
+
+            # A failed check stops the deploy.
+            - name: Check
+              run: ./scripts/check.sh
+              env:
+                  CI: true
+                  RUSTUP_TOOLCHAIN: stable
 
             - name: Download wasm-pack
               run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh

@@ -1,6 +1,6 @@
 # 01: The check script, the access hook and the box list
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: None (can start immediately)
 Spec: `.scratch/docs-overhaul/spec.md`
 
@@ -12,26 +12,26 @@ each decision in full (Implementation Decisions, ticket 01).
 
 ## Acceptance criteria
 
-- [ ] `scripts/check.sh` runs the steps of the spec, with three feature sets.
+- [x] `scripts/check.sh` runs the steps of the spec, with three feature sets.
       These are the native set (for `cargo check`, `cargo test` and
       `cargo doc`), the browser page and the browser console. Each cargo step
       fails on a warning.
-- [ ] The check builds no cuda, no other backend, no bench and no `#[ignore]`
+- [x] The check builds no cuda, no other backend, no bench and no `#[ignore]`
       test.
-- [ ] The host-path step and the prose ratchet follow
+- [x] The host-path step and the prose ratchet follow
       `../burn-mamba/scripts/check.sh`, and skip when `CI` is set.
-- [ ] The check passes on this box. If a step gives warnings on the code of
+- [x] The check passes on this box. If a step gives warnings on the code of
       today, fix the cause, or list it under `## Comments` with the step that
       gives it.
-- [ ] The deploy workflow runs the check with `CI` set, before the four bundle
+- [x] The deploy workflow runs the check with `CI` set, before the four bundle
       builds.
-- [ ] `.claude/hooks/access-allowlist.py` is a copy of the burn-mamba hook,
+- [x] `.claude/hooks/access-allowlist.py` is a copy of the burn-mamba hook,
       with the roots of the spec. `.claude/settings.local.json` runs it as a
       `PreToolUse` hook, and keeps its other entries.
-- [ ] `docs/box.tsv` follows the format of the sibling lists.
+- [x] `docs/box.tsv` follows the format of the sibling lists.
       `../burn-stack/scripts/setup-box.sh --root <an empty directory>` reads it
       without a warning about its format.
-- [ ] `docs/agents/code-review.md` and `docs/agents/testing.md` name the check
+- [x] `docs/agents/code-review.md` and `docs/agents/testing.md` name the check
       script, not the bacon jobs.
 
 ## Notes
@@ -42,3 +42,46 @@ each decision in full (Implementation Decisions, ticket 01).
   part of the commit. Name them in the commit message.
 
 ## Comments
+
+- **Warnings on the code of today, fixed:**
+  - `cargo doc` gave three warnings about doc links. `src/common/hub/mod.rs`
+    linked `[wasm]`, which a native build does not have.
+    `src/common/tokenizer/mod.rs` linked two private items. The three links are
+    now code spans, with the same words. The `[sync]` link next to `[wasm]`
+    gave no warning, but it is also a code span now, so that the two names
+    match. Ticket 04 rewrites these headers.
+  - The host-path step found the absolute home path of this box in
+    `.scratch/bump-burn-mamba-main/issues/05-the-cuda-bench-build-does-not-link.md`.
+    It is now `~/.local/…`.
+  - The nightly `cargo check` of the browser page gave
+    `unused dependency pretty_env_logger`: only the native binary uses it. It is
+    now optional, and the `native` feature enables it. `Cargo.lock` does not
+    change.
+- **Color codes:** the deploy workflow sets `CARGO_TERM_COLOR: always`. Then a
+  color code comes before each `warning`, and the `^warning` grep of
+  `../burn-mamba/scripts/check.sh` finds no warning. A throwaway test crate
+  showed it: 0 matches with the plain grep, 2 with the grep of this repo.
+  `no_warnings` here skips the color codes. `../burn-mamba/.github/workflows/check.yml`
+  sets the same variable, so the CI of burn-mamba does not see a warning. That
+  fix is for a burn-mamba session.
+- **Toolchains in CI:** the deploy installs stable, then nightly. Nightly stays
+  the default, so wasm-pack builds as before. The check step sets
+  `RUSTUP_TOOLCHAIN: stable`, so the native steps use stable, as on this box.
+  `cargo +nightly` wins over that variable, so the wasm steps use nightly.
+- **The hook:** the hub cache root follows `$HF_HOME`, as
+  `src/common/hub/sync.rs` does. The spec does not name `$CARGO_HOME/bin`, so
+  this copy does not have that root. The burn-mamba copy has it.
+- **The box list:** each version is the HEAD of the checkout on this box.
+  `burn-mamba` and `burn-stack` have `-`, as in the list of burn-stack.
+  `setup-box.sh --root <an empty directory> docs/box.tsv` gave
+  `done: created 6, present 0, warnings 0.`
+- **The prose ratchet skips `.scratch/`,** as `../burn-mamba/scripts/check.sh`
+  does. The ticket says to follow that script. The Testing Decisions of the
+  spec say that the ratchet "covers each changed `.rs` and `.md` file". The
+  maintainer decides if the ratchet also reads `.scratch/`.
+- **Review notes for the maintainer:** the old `permissions.allow` entries of
+  `.claude/settings.local.json` stay. The hook denies some of them now
+  (`Bash(find / …)`), and the `Read` rule for the parent directory of this repo
+  allows more than the hook.
+  Until ticket 03, the deny message of the hook names an access allowlist that
+  `CLAUDE.md` does not have yet.

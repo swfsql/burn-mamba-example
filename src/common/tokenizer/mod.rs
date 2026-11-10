@@ -12,8 +12,8 @@
 //!    → ByteLevel decoder`
 //!
 //! plus the `added_tokens` table in both cases. The two differ in more than
-//! configuration — see [`byte_level::split_words_llama3`] for the pre-tokenizer
-//! and [`bpe::Bpe::tokenize`] for `ignore_merges`.
+//! configuration — see `byte_level::split_words_llama3` for the pre-tokenizer
+//! and `bpe::Bpe::tokenize` for `ignore_merges`.
 //!
 //! This replaces the `tokenizers` crate. Anything the file asks for outside those
 //! pipelines is rejected at load time rather than silently ignored.

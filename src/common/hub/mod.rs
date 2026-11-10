@@ -3,7 +3,7 @@
 //!
 //! Only what the demo needs is implemented: resolve a file's metadata (commit,
 //! etag, size) and get its bytes, with an on-disk cache natively
-//! ([sync]) and a chunked IndexedDB cache in the browser ([wasm]).
+//! (`sync`) and a chunked IndexedDB cache in the browser (`wasm`).
 //!
 //! Both back-ends share the naming below, and the browser one keeps `hf-hub`'s
 //! IndexedDB database/store/key layout so caches written by earlier builds of this

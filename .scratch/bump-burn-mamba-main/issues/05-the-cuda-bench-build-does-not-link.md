@@ -20,7 +20,7 @@ build links.
   `LLVMOrcLLJITLookup`, `LLVM_InitializeNativeTarget`,
   `LLVM_InitializeNativeAsmPrinter`, and others of the ORC JIT and of the
   native-target init.
-- The link line has `-L /root/.local/share/tracel/tracel-llvm-23.1.0-4/lib`, and
+- The link line has `-L ~/.local/share/tracel/tracel-llvm-23.1.0-4/lib`, and
   no `-l` flag for an LLVM library.
 - The link line also holds `libcubecl_llvm`, `libpliron_llvm` and
   `libllvm_sys`. No one checked which crate brings them into a cuda build.

@@ -27,7 +27,7 @@ mamba3-siso = ["mamba3"]
 mamba3-mimo = ["mamba3"]
 #
 ## binary from src/native/main.rs
-native = []
+native = ["dep:pretty_env_logger"]
 #
 ## burn backend - check README for more info
 backend-ndarray = ["burn/ndarray", "burn-mamba/backend-ndarray"]
@@ -69,7 +69,8 @@ harness = false
 [dependencies]
 anyhow = "1.0.0"
 log = "0.4.28"
-pretty_env_logger = "0.5.0"
+## the logger of the native binary
+pretty_env_logger = { version = "0.5.0", optional = true }
 ## only the seeded StdRng + WeightedIndex of src/common/sampling.rs are used. The
 ## default features add `os_rng`, which pulls a second `getrandom` (0.3) that the
 ## `getrandom_backend="wasm_js"` rustflag in .cargo/config.toml then rejects for

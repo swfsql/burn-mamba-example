@@ -21,7 +21,7 @@ An expected value comes from a source outside the code under test:
 
 ## Outside the seams
 
-- The Yew UI and the wasm console have no tests. A wasm `cargo check` (the bacon jobs) shows that they compile. Only a run in the browser shows that they work, and only the user does that run.
+- The browser page and the browser console have no tests. The wasm `cargo check` steps of `scripts/check.sh` show that they compile. Only a run in the browser shows that they work, and only the user does that run.
 - `src/common/hub/` has no tests of its own. A download, as in a native run or in `manifests_cover_the_whole_checkpoint`, exercises it.
 - The tests run on `flex`. A failure that only another backend shows needs a run on that backend.
 

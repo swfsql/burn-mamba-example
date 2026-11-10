@@ -46,6 +46,9 @@ IDE-development switches.
 ## Commands
 
 ```bash
+# the check of CI: the four checkpoints on flex, for each front-end
+./scripts/check.sh
+
 # native (this exact line is the bacon default job)
 cargo check --no-default-features --features "native,backend-flex,backend-simd,mamba2"
 RUSTFLAGS="-C target-cpu=native" cargo run --release --no-default-features \
@@ -211,7 +214,10 @@ kernels.sh                per-case GPU kernel-launch counts for the two cuda
 kernels.md                generated kernel-launch report (tracked)
 frontend/{mamba1,mamba2,mamba3-siso,mamba3-mimo}/  index.html + index.js (tracked);
                           `pkg/` = wasm-pack output (ignored)
-.github/workflows/deploy.yml  builds all four wasm bundles on push to main → gh-pages
+scripts/check.sh          the check of this repo, also run by CI
+docs/box.tsv              the directories next to this repo that the docs name
+.github/workflows/deploy.yml  runs the check, then builds all four wasm bundles on push to
+                          main → gh-pages
 ```
 
 ## Architecture
@@ -305,9 +311,9 @@ progress bar. Loaded bytes are fed to `MambaWrapperBuilder::with`, which drops t
   config alone cannot tell apart — the Mamba-3 `chunk_size` — belongs on the `ModelSpec`.
 - **`frontend/*/pkg/` is generated** by `wasm-pack` and untracked; only `index.html` and
   `index.js` are in git. Don't hand-edit `pkg/`.
-- **CI = deploy.** `.github/workflows/deploy.yml` builds all four models' yew bundles on push
-  to `main` and publishes `publish/` to `gh-pages`. Adding a model or renaming a feature
-  means editing that workflow.
+- **CI = deploy.** `.github/workflows/deploy.yml` runs `scripts/check.sh`, then builds all
+  four models' yew bundles on push to `main` and publishes `publish/` to `gh-pages`. Adding
+  a model or renaming a feature means editing that workflow and `scripts/check.sh`.
 - **Commits**: when a skill or the user tells you to commit, commit your work to the
   current branch. When the user asks only for a commit message, write it as text for the
   user to copy. A commit message has a title line and a short body, and it ends with the
