@@ -17,7 +17,7 @@ text, and the text still matches the README samples.
   features passes.
 - [x] `cargo test` with `flex`, `simd` and the four checkpoint features passes,
   with one test thread.
-- [ ] The user ran the native app on `flex` for each of the four checkpoints
+- [x] The user ran the native app on `flex` for each of the four checkpoints
   (`MAMBA_MODEL=<id>`). For each checkpoint, run agreement holds, and the text
   of the sequential run starts with its README sample, up to the `...` of the
   sample. The `## Comments` of this ticket record the result of each run.
@@ -52,7 +52,10 @@ text, and the text still matches the README samples.
 - **Check and tests:** the `cargo check` passes and rebuilds no crate. It shows
   the same two `TensorData::to_vec` deprecation warnings as ticket 02.
   `cargo test`: 13 pass, 2 are ignored.
-- **Native runs:** not done. On Linux, the dependency graph is the same as at
-  `125d24c`, where the native runs of ticket 02 passed.
+- **Native runs:** the maintainer decided that the native runs of ticket 02 at
+  `125d24c` also cover this ticket. On Linux, the dependency graph of
+  `76b3878` is the same as at `125d24c`. For each of the four checkpoints, run
+  agreement holds, and the sequential text starts with its README sample (see
+  the `## Comments` of ticket 02).
 - **`bench.md` and `kernels.md`:** not regenerated. The maintainer regenerates
   them, with a pinned `powersave` CPU governor.
