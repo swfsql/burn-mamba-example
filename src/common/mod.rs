@@ -570,7 +570,7 @@ impl MambaWrapper {
             }
 
             let logits_list = self.vocab_logits(logits_list);
-            let logits_list = logits_list.into_data().to_vec::<Precision>().unwrap();
+            let logits_list = logits_list.into_data().try_to_vec::<Precision>().unwrap();
 
             // logits contains an output for each timestep
             let logits_list = logits_list
@@ -671,7 +671,7 @@ impl MambaWrapper {
         let logits = logits
             .cast(PRECISION_FLOAT_D_TYPE)
             .into_data()
-            .to_vec::<Precision>()
+            .try_to_vec::<Precision>()
             .unwrap();
 
         Ok((logits, new_caches))
