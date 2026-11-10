@@ -83,7 +83,7 @@ spec gives each decision in full (Implementation Decisions).
   checkpoints. For each checkpoint, run agreement holds, and the text of the
   sequential run starts with its README sample. The `## Comments` of this ticket
   record the result of each run.
-- [ ] Before this ticket becomes resolved, the user regenerates `bench.md` and
+- [x] Before this ticket becomes resolved, the user regenerates `bench.md` and
   `kernels.md`.
 
 ## Names
@@ -175,3 +175,15 @@ spec gives each decision in full (Implementation Decisions).
   writes no report. Ticket 05 covers this defect.
 - **Resolved:** by the maintainer, with the criterion of `bench.md` and
   `kernels.md` open. Ticket 05 closes it.
+- **Reports:** the user regenerated `bench.md` and `kernels.md` on 2026-11-10,
+  after the fix of ticket 05. The maintainer accepts them.
+  - The CPU governor was `powersave`, which holds each core at its minimum
+    clock. The runs of `a19689d` did not use it. So a time cell of `bench.md`
+    does not compare with its value at `a19689d`. The CPU-bound cells are
+    1.5–2× slower. The GPU-bound cell (`forward`, `mamba3-mimo`, `cuda`) changes
+    by 1%.
+  - Kernel counts do not depend on the clock. So `kernels.md` shows the change
+    of this bump. The largest change is `forward`, `mamba1`,
+    `cuda + fusion + autotune`: 19184 to 25418 (+32%). Use
+    `git diff a19689d -- kernels.md` for each cell.
+  - `.scratch/bench-host-info/` records the host of each run in the future.

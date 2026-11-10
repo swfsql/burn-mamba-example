@@ -21,7 +21,7 @@ text, and the text still matches the README samples.
   (`MAMBA_MODEL=<id>`). For each checkpoint, run agreement holds, and the text
   of the sequential run starts with its README sample, up to the `...` of the
   sample. The `## Comments` of this ticket record the result of each run.
-- [ ] Before this ticket becomes resolved, the user regenerates `bench.md` and
+- [x] Before this ticket becomes resolved, the user regenerates `bench.md` and
   `kernels.md`.
 
 ## Constraints
@@ -63,3 +63,7 @@ text, and the text still matches the README samples.
   the reports after ticket 05, with a pinned `powersave` CPU governor.
 - **Resolved:** by the maintainer, with the criterion of `bench.md` and
   `kernels.md` open. Ticket 05 closes it.
+- **Reports:** the user regenerated `bench.md` and `kernels.md` on 2026-11-10,
+  with the `powersave` governor. The `## Comments` of ticket 02 give the
+  result. On Linux, this ticket does not change the dependency graph. So the
+  change of the reports comes from ticket 02 and from the governor.
