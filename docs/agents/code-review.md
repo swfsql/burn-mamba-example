@@ -5,7 +5,7 @@ The additions of this repo to `/code-review`.
 ## What each agent receives
 
 - **Standards agent:** the **Constraints** and **Names** sections of the ticket, when the ticket has them. A constraint of the ticket wins over a general rule of `CLAUDE.md`. For example, a ticket that permits a new dependency stops the "reach for a Burn crate first" rule for that dependency.
-- **Both agents:** the results of the checks that already ran. `scripts/check.sh` covers the warnings of the three front-ends, the doc links of the native build and the tests that are not `#[ignore]`. It also covers the host paths. A changed `.rs` or `.md` file outside `.scratch/` fails when it has more hard violations of `ste-lint.py` (semicolons, sentence length, changelog phrasing) than on `origin/main`. Each agent uses these results as they are, and it reports what the checks cannot see.
+- **Both agents:** the results of the checks that already ran. `scripts/check.sh` covers the warnings of the three front-ends, the doc links of the native build and the tests that are not `#[ignore]`. It also covers the host paths. The prose step reads each changed `.rs` and `.md` file, also in `.scratch/`. A file fails when it has more hard violations of `ste-lint.py` (semicolons, sentence length, changelog phrasing) than on `origin/main`. Each agent uses these results as they are, and it reports what the checks cannot see.
 
 ## Review before the last commit
 

@@ -26,3 +26,8 @@ section (Implementation Decisions, ticket 03).
 - [ ] `ste-lint.py` passes on `CLAUDE.md`, and `scripts/check.sh` passes.
 
 ## Comments
+
+- Ticket 01 added the access allowlist to the Custom Commands of `CLAUDE.md`.
+  Keep its rule on burn-mamba and burn-stack. They have other users, so they
+  stay read-only. A change to them starts as a ticket in their own tracker.
+  Do not copy the read and write roots of `../burn-mamba/CLAUDE.md` for them.

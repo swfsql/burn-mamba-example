@@ -30,8 +30,9 @@ The docs of this repo do not follow these standards yet:
 
 The grilling session of this spec already did these parts:
 
-- `GLOSSARY.md`: the new terms Topology, Checkpoint feature, Reference
-  backend, Front-end, Hub cache, Fetch, Erase, Load, Build and Unload. The terms
+- `GLOSSARY.md`: the new terms `Topology`, `Checkpoint feature`,
+  `Reference backend`, `Front-end`, `Hub cache`, `Fetch`, `Erase`, `Load`,
+  `Build` and `Unload`. The terms
   Manifest, Sequential run and Parallel run are sharper.
 - `docs/adr/0001` to `0004`: the standalone glue, the hardcoded topologies,
   the f32 load, and the compile-time list with the run-time pick.
@@ -183,7 +184,7 @@ Tickets 06 and 07 are for later, and need triage.
   |---|---|
   | Load path | the header of `store_load.rs` |
   | Two run modes | the glossary, the docs of the run wrapper |
-  | Verifying a backend | the glossary, `docs/agents/testing.md` |
+  | `Verifying a backend` | the glossary, `docs/agents/testing.md` |
   | Device & precision | ADR-0003, the header of `common/mod.rs` |
   | Browser asset lifecycle | the glossary, the header of `wasm/yew_ui/mod.rs` |
   | Glue only | the summary, a Code rule |

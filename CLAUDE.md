@@ -350,6 +350,24 @@ builds:
 
 ## Custom Commands
 
+- **Access is an allowlist. It holds for every agent and every command,
+  read-only commands included.**
+  - Read and write: this repo and the auto-memory.
+  - Read: `../{burn-mamba,burn-stack,burn,cubecl,cubek}/`,
+    `../{hf-hub,candle,tokenizers}/`, `../papers/`, `../py/`, the cargo registry
+    and git checkouts, the rustup toolchains, `~/.claude/` and the hub cache of
+    the native binary (`~/.cache/huggingface/hub`).
+  - `/tmp`: read tool output, and write throwaway files with Bash.
+  - Any other path: a local hook refuses it. Ask the user, name the exact path,
+    and give the command that approves it, which only the user runs:
+    `! echo <path> >> .claude/access-approved.txt`. To revoke it, the user
+    deletes that line.
+  - Reach an allowed sibling by its exact path, not by a listing or search of
+    the parent directory.
+- **`../burn-mamba/` and `../burn-stack/` have other users.** A change to one of
+  them starts as a ticket in its own tracker (its `docs/agents/issue-tracker.md`).
+  A session of this repo can write that ticket after the user approves its path.
+  A session of that repo does the change, under the rules of that repo.
 - `rg`: available.
 - `cargo fmt`: don't use.
 - **Always** edit files with the Edit/Write tools — including when a harness or

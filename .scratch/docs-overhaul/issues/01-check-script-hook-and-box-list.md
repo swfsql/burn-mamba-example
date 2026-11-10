@@ -75,13 +75,20 @@ each decision in full (Implementation Decisions, ticket 01).
   `burn-mamba` and `burn-stack` have `-`, as in the list of burn-stack.
   `setup-box.sh --root <an empty directory> docs/box.tsv` gave
   `done: created 6, present 0, warnings 0.`
-- **The prose ratchet skips `.scratch/`,** as `../burn-mamba/scripts/check.sh`
-  does. The ticket says to follow that script. The Testing Decisions of the
-  spec say that the ratchet "covers each changed `.rs` and `.md` file". The
-  maintainer decides if the ratchet also reads `.scratch/`.
-- **Review notes for the maintainer:** the old `permissions.allow` entries of
-  `.claude/settings.local.json` stay. The hook denies some of them now
-  (`Bash(find / …)`), and the `Read` rule for the parent directory of this repo
-  allows more than the hook.
-  Until ticket 03, the deny message of the hook names an access allowlist that
-  `CLAUDE.md` does not have yet.
+- **The decisions of the maintainer, after the review:**
+  - The prose ratchet also reads `.scratch/`, as the Testing Decisions of the
+    spec say. `../burn-mamba/scripts/check.sh` skips it. A ticket in the tracker
+    of burn-mamba and a ticket in the tracker of burn-stack ask for the same
+    change. The spec failed the wider ratchet with two hard violations. Each was
+    a name next to a synonym (`Erase` and `delete`, `Verifying` and `check`).
+    The names are now code spans.
+  - The hook gets the root `$CARGO_HOME/bin`, as in the burn-mamba copy. The
+    auto mode of the agent refused that edit of its own hook, so the maintainer
+    makes it.
+  - `.claude/settings.local.json` lost the three `permissions.allow` entries
+    that the hook does not permit. The first is the `Read` rule for the parent
+    directory of this repo. The second is `Read` of `~/.cargo/registry`, because
+    the cargo home of this box is elsewhere. The third is `Bash(find / …)`.
+  - `CLAUDE.md` now has the access allowlist. burn-mamba and burn-stack have
+    other users, so they stay read-only. A change to them starts as a ticket in
+    their own tracker.

@@ -60,7 +60,7 @@ check_prose() {
         {
             git diff --name-only --diff-filter=d "$base" -- '*.rs' '*.md'
             git ls-files --others --exclude-standard -- '*.rs' '*.md'
-        } | grep -v '^\.scratch/' | sort -u
+        } | sort -u
     )
     rm -rf "$old_dir"
     return "$failed"
