@@ -5,6 +5,12 @@
 //! `Linear` weights (PyTorch `[out, in]` → Burn `[in, out]`) and casts every float
 //! tensor to [crate::Precision]. That last cast is why both checkpoints share one
 //! code path even though mamba-130m stores f32 and mamba2-130m stores f16.
+//!
+//! The load is strict. Each parameter of the network must get a checkpoint
+//! tensor, with one exception: [`ALLOWED_MISSING`], the parameters of the flag
+//! channel of the vocab network. No HF checkpoint holds them, so they keep
+//! their init values. A checkpoint tensor that reaches no parameter is only
+//! logged.
 
 use burn::module::Param;
 use burn::prelude::*;
@@ -32,6 +38,17 @@ impl Checkpoint {
     }
 }
 
+/// The parameters of the network that no checkpoint tensor fills: the flag
+/// embedding, and the weight and the bias of the flag head. The load keeps
+/// their init values. The flag embedding is zero at init, and each token has
+/// the flag 0. The run wrapper drops the flag logit, so no output reads the
+/// flag head.
+const ALLOWED_MISSING: &[&str] = &[
+    "flag_embedding",
+    "flag_head.weight",
+    "flag_head.bias",
+];
+
 /// Builds the model from `mamba_config` and overwrites every parameter from the
 /// checkpoint, then ties the LM head to the (transposed) embedding.
 pub fn load_mamba(
@@ -43,9 +60,12 @@ pub fn load_mamba(
 
     let mut store = checkpoint
         .store()
-        // `MambaVocabNet` is an enum module: drop the `Mamba1`/`Mamba2` variant
-        // segment so the checkpoint paths line up with the inner network.
+        // `MambaBlock` is an enum module: drop its `Mamba1`/`Mamba2`/`Mamba3`
+        // variant segment, so the checkpoint paths line up with the block.
         .skip_enum_variants(true)
+        // The store returns the missing parameters, and does not fail on them.
+        // The check below fails on each one that is not in `ALLOWED_MISSING`.
+        .allow_partial(true)
         .with_from_adapter(
             PyTorchToBurnAdapter.chain(FloatCastAdapter::to(crate::PRECISION_FLOAT_D_TYPE.into())),
         );
@@ -56,6 +76,15 @@ pub fn load_mamba(
     let result = mamba
         .load_from(&mut store)
         .map_err(|e| anyhow::anyhow!("failed to load the mamba checkpoint: {e}"))?;
+    let unfilled: Vec<&str> = result
+        .missing
+        .iter()
+        .map(|(path, _containers)| path.as_str())
+        .filter(|path| !ALLOWED_MISSING.contains(path))
+        .collect();
+    if !unfilled.is_empty() {
+        anyhow::bail!("the checkpoint has no tensor for the module parameter(s): {unfilled:?}");
+    }
     if !result.unused.is_empty() {
         log::warn!(
             "{} checkpoint tensor(s) went unused: {:?}",
@@ -75,15 +104,16 @@ pub fn load_mamba(
 
 /// The `safetensors name → Burn module path` rewrites, applied in order.
 ///
-/// The structural rules run first (they strip the `backbone.` prefix and expand
-/// `layers.{i}.mixer` into `layers.real_layers.{i}.mamba_block`); the
-/// per-parameter renames then operate on the already-rewritten paths.
+/// The structural rules run first. They remove the `backbone.` prefix and
+/// expand `layers.{i}.mixer` into `layers.real_layers.{i}.block`. The
+/// per-parameter renames then operate on the rewritten paths. The family of the
+/// block config selects the per-parameter renames.
 fn key_remapping(config: &MambaVocabNetConfig) -> Vec<(&'static str, &'static str)> {
     let mut rules: Vec<(&'static str, &'static str)> = vec![
-        // backbone.layers.{i}.mixer.X -> layers.real_layers.{i}.mamba_block.X
+        // backbone.layers.{i}.mixer.X -> layers.real_layers.{i}.block.X
         (
             r"^backbone\.layers\.(\d+)\.mixer\.",
-            "layers.real_layers.$1.mamba_block.",
+            "layers.real_layers.$1.block.",
         ),
         // backbone.layers.{i}.X -> layers.real_layers.{i}.X
         (r"^backbone\.layers\.(\d+)\.", "layers.real_layers.$1."),
@@ -95,44 +125,37 @@ fn key_remapping(config: &MambaVocabNetConfig) -> Vec<(&'static str, &'static st
         (r"(^|\.)norm(_f|2)?\.weight$", "${1}norm${2}.gamma"),
     ];
 
-    #[allow(irrefutable_let_patterns)]
-    match config {
+    match &config.block {
         #[cfg(feature = "mamba1")]
-        MambaVocabNetConfig::Mamba1 { .. } => {
-            rules.push((r"\.mamba_block\.A_log$", ".mamba_block.a_log"));
-            rules.push((r"\.mamba_block\.D$", ".mamba_block.d"));
+        MambaBlockConfig::Mamba1(_) => {
+            rules.push((r"\.block\.A_log$", ".block.a_log"));
+            rules.push((r"\.block\.D$", ".block.d"));
         }
         #[cfg(feature = "mamba2")]
-        MambaVocabNetConfig::Mamba2 { .. } => {
-            rules.push((r"\.mamba_block\.A_log$", ".mamba_block.a_log_h"));
-            rules.push((r"\.mamba_block\.D$", ".mamba_block.d_h"));
-            rules.push((r"\.mamba_block\.dt_bias$", ".mamba_block.dt_bias_h"));
+        MambaBlockConfig::Mamba2(_) => {
+            rules.push((r"\.block\.A_log$", ".block.a_log_h"));
+            rules.push((r"\.block\.D$", ".block.d_h"));
+            rules.push((r"\.block\.dt_bias$", ".block.dt_bias_h"));
         }
         #[cfg(feature = "mamba3")]
-        MambaVocabNetConfig::Mamba3 { mamba_block, .. } => {
+        MambaBlockConfig::Mamba3(block) => {
             // Mamba-3 has no `A_log`: A is data-dependent, projected out of
             // `in_proj` rather than stored.
-            rules.push((r"\.mamba_block\.D$", ".mamba_block.d_h"));
-            rules.push((r"\.mamba_block\.dt_bias$", ".mamba_block.dt_bias_h"));
-            rules.push((r"\.mamba_block\.B_bias$", ".mamba_block.b_bias_hmr"));
-            rules.push((r"\.mamba_block\.C_bias$", ".mamba_block.c_bias_hmr"));
+            rules.push((r"\.block\.D$", ".block.d_h"));
+            rules.push((r"\.block\.dt_bias$", ".block.dt_bias_h"));
+            rules.push((r"\.block\.B_bias$", ".block.b_bias_hmr"));
+            rules.push((r"\.block\.C_bias$", ".block.c_bias_hmr"));
             // The QK-norms are `B_norm`/`C_norm`, which the generic `norm.weight`
             // rule above deliberately does not reach (it anchors on `.norm`).
-            rules.push((
-                r"\.mamba_block\.B_norm\.weight$",
-                ".mamba_block.b_norm.gamma",
-            ));
-            rules.push((
-                r"\.mamba_block\.C_norm\.weight$",
-                ".mamba_block.c_norm.gamma",
-            ));
+            rules.push((r"\.block\.B_norm\.weight$", ".block.b_norm.gamma"));
+            rules.push((r"\.block\.C_norm\.weight$", ".block.c_norm.gamma"));
             // The MIMO projections exist only at `mimo_rank > 1`: the SISO
             // checkpoint stores none and `Mamba3` holds `None` in their place,
             // so the rules are conditioned on the same thing the tensors are.
-            if mamba_block.mimo_rank > 1 {
-                rules.push((r"\.mamba_block\.mimo_x$", ".mamba_block.mimo_x_hmp"));
-                rules.push((r"\.mamba_block\.mimo_z$", ".mamba_block.mimo_z_hmp"));
-                rules.push((r"\.mamba_block\.mimo_o$", ".mamba_block.mimo_o_hmp"));
+            if block.mimo_rank > 1 {
+                rules.push((r"\.block\.mimo_x$", ".block.mimo_x_hmp"));
+                rules.push((r"\.block\.mimo_z$", ".block.mimo_z_hmp"));
+                rules.push((r"\.block\.mimo_o$", ".block.mimo_o_hmp"));
             }
         }
     }
@@ -142,36 +165,19 @@ fn key_remapping(config: &MambaVocabNetConfig) -> Vec<(&'static str, &'static st
 /// The checkpoints tie the LM head to the embedding (`missing_lm_head: true`),
 /// so the head is the transposed embedding table.
 ///
-/// Public because it is the second half of building a runnable model: anything
-/// that assembles one without a checkpoint — `benches/model.rs` builds the same
-/// topology on random weights — must materialise the head the same way, or it
-/// measures `VocabNetwork::apply_lm_head`'s transpose-per-call fallback instead.
+/// It is public because it is the second half of the build of a runnable
+/// model. A build without a checkpoint must also call it. `benches/model.rs`
+/// builds the same topology on random weights. Without this head, it measures
+/// the tied head of the vocab network, which transposes the embedding at each
+/// call.
 pub fn tie_lm_head(mamba: &mut MambaVocabNet, device: &Device) {
-    let embedding_weight = match mamba {
-        #[cfg(feature = "mamba1")]
-        MambaVocabNet::Mamba1(m) => m.embedding.weight.val(),
-        #[cfg(feature = "mamba2")]
-        MambaVocabNet::Mamba2(m) => m.embedding.weight.val(),
-        #[cfg(feature = "mamba3")]
-        MambaVocabNet::Mamba3(m) => m.embedding.weight.val(),
-    };
-
-    let weight = embedding_weight.swap_dims(0, 1);
+    let weight = mamba.embedding.weight.val().swap_dims(0, 1);
     // `from_data(into_data())` forces the transposed view to be contiguous.
     let weight: Tensor<2> = Tensor::from_data(weight.into_data(), device);
-    let lm_head = Some(burn::nn::Linear {
+    mamba.lm_head = Some(burn::nn::Linear {
         weight: Param::from_tensor(weight),
         bias: None,
     });
-
-    match mamba {
-        #[cfg(feature = "mamba1")]
-        MambaVocabNet::Mamba1(m) => m.lm_head = lm_head,
-        #[cfg(feature = "mamba2")]
-        MambaVocabNet::Mamba2(m) => m.lm_head = lm_head,
-        #[cfg(feature = "mamba3")]
-        MambaVocabNet::Mamba3(m) => m.lm_head = lm_head,
-    }
 }
 
 /// Checks [`key_remapping`] against the real checkpoint manifests: nothing on
@@ -180,11 +186,15 @@ pub fn tie_lm_head(mamba: &mut MambaVocabNet, device: &Device) {
 /// A remapping bug is otherwise only discoverable by downloading ~1.1GB and
 /// watching the load fail, so every compiled-in checkpoint's `model.safetensors`
 /// header is vendored here — the model-level tensors plus the whole of layer 0,
-/// read from `refs/pr/1` of each repo. Each name is pushed through the same
-/// rules the store uses, and the resulting set must be *exactly* the set of
-/// parameters the built module exposes, with matching shapes: a checkpoint
-/// tensor landing on no parameter would be silently dropped (`load_from` only
-/// logs those), and a parameter no tensor fills would keep its random init.
+/// read from `refs/pr/1` of each repo. The tests push each name through the
+/// rules that the store uses. The result must be *exactly* the parameters of
+/// the built module minus [`ALLOWED_MISSING`], with the same shapes:
+///
+/// - A checkpoint tensor that reaches no parameter: the load only logs it, so
+///   its values are lost.
+/// - A parameter outside [`ALLOWED_MISSING`] that no tensor fills: the loader
+///   fails, but only after the download.
+///
 /// [`remapping_rules_all_fire`] closes the third gap — a rule matching nothing,
 /// which is a rule that has stopped describing the checkpoint — and
 /// [`manifests_cover_the_whole_checkpoint`] the fourth: a manifest that is not
@@ -326,28 +336,8 @@ mod tests {
     /// One layer and a token-sized vocabulary: the parameter *paths* depend on
     /// neither, so the comparison runs on a model small enough to build.
     fn one_layer(mut config: MambaVocabNetConfig) -> MambaVocabNetConfig {
-        let (n_real_layers, vocab_size) = match &mut config {
-            #[cfg(feature = "mamba1")]
-            MambaVocabNetConfig::Mamba1 {
-                n_real_layers,
-                vocab_size,
-                ..
-            } => (n_real_layers, vocab_size),
-            #[cfg(feature = "mamba2")]
-            MambaVocabNetConfig::Mamba2 {
-                n_real_layers,
-                vocab_size,
-                ..
-            } => (n_real_layers, vocab_size),
-            #[cfg(feature = "mamba3")]
-            MambaVocabNetConfig::Mamba3 {
-                n_real_layers,
-                vocab_size,
-                ..
-            } => (n_real_layers, vocab_size),
-        };
-        *n_real_layers = 1;
-        *vocab_size = TEST_VOCAB;
+        config.shape.stack.n_real_layers = 1;
+        config.shape.vocab_size = TEST_VOCAB;
         config
     }
 
@@ -400,12 +390,13 @@ mod tests {
         model
             .collect(None, None, true)
             .into_iter()
-            .map(|snapshot| (snapshot.full_path(), snapshot.shape.to_vec()))
+            .map(|tensor| (tensor.name, tensor.shape.to_vec()))
             .collect()
     }
 
-    /// Neither side of the load may hold anything the other does not: every
-    /// checkpoint tensor lands on a parameter, and every parameter is filled.
+    /// Neither side of the load may hold anything the other does not. Each
+    /// checkpoint tensor reaches a parameter. A checkpoint tensor fills each
+    /// parameter that is not in [`ALLOWED_MISSING`].
     #[test]
     fn checkpoints_and_modules_hold_the_same_tensors() {
         for vendored in VENDORED {
@@ -431,14 +422,15 @@ mod tests {
             let expected_keys: BTreeSet<&str> = expected.keys().map(String::as_str).collect();
             let actual_keys: BTreeSet<&str> = actual.keys().map(String::as_str).collect();
             let dangling: Vec<&str> = expected_keys.difference(&actual_keys).copied().collect();
-            let unfilled: Vec<&str> = actual_keys.difference(&expected_keys).copied().collect();
+            let unfilled: BTreeSet<&str> = actual_keys.difference(&expected_keys).copied().collect();
+            let allowed: BTreeSet<&str> = ALLOWED_MISSING.iter().copied().collect();
             assert!(
                 dangling.is_empty(),
                 "{id}: checkpoint tensor(s) that reach no module parameter: {dangling:?}"
             );
-            assert!(
-                unfilled.is_empty(),
-                "{id}: module parameter(s) that no checkpoint tensor fills: {unfilled:?}"
+            assert_eq!(
+                unfilled, allowed,
+                "{id}: the module parameters that no checkpoint tensor fills must be `ALLOWED_MISSING`"
             );
             for (path, want) in &expected {
                 assert_eq!(&actual[path], want, "{id}: shape mismatch at {path}");

@@ -28,7 +28,7 @@ This tracker holds only the work of this repo. `../burn-mamba` stays read-only f
 
 ### The burn-mamba pin
 
-`Cargo.toml` pins `burn-mamba` and `burn` to GitHub revs. The `burn` rev must equal the one that `../burn-mamba` pins. While the burn-mamba part is in progress, use one of these:
+`Cargo.toml` pins `burn-mamba` to a GitHub rev, and takes `burn` from crates.io. The `burn` line must give the same `burn` as the active `burn` line of `../burn-mamba`. That is the same crates.io version, or the same git rev when `../burn-mamba` uses a burn git rev. Else cargo resolves two `burn` crates, and no types unify. While the burn-mamba part is in progress, use one of these:
 
 - **No active burn-mamba session or parallel agent** (`ListAgents` shows them): enable the commented `path` line of `burn-mamba` in `Cargo.toml`. The build then uses the working tree of `../burn-mamba`.
 - **An active burn-mamba session or parallel agent**: it can change that working tree. Wait for its push, then move the pin to the pushed commit.
@@ -36,8 +36,8 @@ This tracker holds only the work of this repo. `../burn-mamba` stays read-only f
 Each commit of this repo builds against the pin. Before you commit in this repo:
 
 1. Set the `burn-mamba` rev to the pushed burn-mamba commit.
-2. Set the `burn` rev to the one that `../burn-mamba` pins at that commit.
-3. Comment out the `path` line, and enable the `git` line.
+2. Set the `burn` line to the active `burn` line of `../burn-mamba` at that commit.
+3. Comment out the `path` lines, and enable the `burn-mamba` git line.
 4. Run `cargo check`, which updates `Cargo.lock`.
 
 ## Wayfinding operations

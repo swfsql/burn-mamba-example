@@ -6,7 +6,7 @@
 //!
 //! | Group | What it runs | Mirrors |
 //! |-------|--------------|---------|
-//! | `forward` | one chunkwise pass over `[batch, sequence]` token ids | `run_parallel` |
+//! | `forward` | one chunkwise pass over `[batch, sequence, 2]` token pairs | `run_parallel` |
 //! | `step`    | one recurrent decode step from the previous step's cache | `run_sequential` |
 //!
 //! Cases are the [`ModelSpec::id`]s of [`hf::MODELS`] — `mamba1`, `mamba2`,
@@ -120,7 +120,7 @@
 use burn::prelude::*;
 use burn_mamba::prelude::*;
 use burn_mamba_example::{
-    ModelSpec, PRECISION_FLOAT_D_TYPE, PRECISION_INT_D_TYPE, hf, tie_lm_head,
+    ModelSpec, PRECISION_FLOAT_D_TYPE, PRECISION_INT_D_TYPE, hf, tie_lm_head, token_pairs,
 };
 use criterion::measurement::WallTime;
 use criterion::{
@@ -482,42 +482,28 @@ fn random_model(spec: &ModelSpec, device: &Device) -> MambaVocabNet {
 /// run feeds the model the same ids — a timing difference between two configs is
 /// then never a difference in inputs. Ids stay under `vocab_size`, since the
 /// padded tail of the embedding table is never a real token.
-fn token_ids(count: usize, spec: &ModelSpec) -> Vec<i32> {
-    let vocab = vocab_size(&(spec.config)()) as u64;
+fn token_ids(count: usize, spec: &ModelSpec) -> Vec<usize> {
+    // The checkpoint's *unpadded* vocabulary — the range a real token id lives in.
+    let vocab = (spec.config)().shape.vocab_size as u64;
     let mut state = 0x2545_F491_4F6C_DD1Du64;
     (0..count)
         .map(|_| {
             state = state
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(1442695040888963407);
-            ((state >> 33) % vocab) as i32
+            ((state >> 33) % vocab) as usize
         })
         .collect()
 }
 
-/// Token ids for a `forward` pass, `[batch, sequence]`.
-fn input_ids(shape: Shape, spec: &ModelSpec, device: &Device) -> Tensor<2, Int> {
-    let ids = token_ids(shape.batch * shape.sequence, spec);
-    let ids: Tensor<1, Int> = Tensor::from_data(ids.as_slice(), device);
-    ids.reshape([shape.batch, shape.sequence])
+/// Token pairs for a `forward` pass, `[batch, sequence, 2]`.
+fn input_pairs(shape: Shape, spec: &ModelSpec, device: &Device) -> Tensor<3, Int> {
+    token_pairs(&token_ids(shape.batch * shape.sequence, spec), shape.batch, device)
 }
 
-/// Token ids for one decode step, `[batch]`.
-fn input_id(shape: Shape, spec: &ModelSpec, device: &Device) -> Tensor<1, Int> {
-    Tensor::from_data(token_ids(shape.batch, spec).as_slice(), device)
-}
-
-/// The checkpoint's *unpadded* vocabulary — the range a real token id lives in.
-#[allow(irrefutable_let_patterns)]
-fn vocab_size(config: &MambaVocabNetConfig) -> usize {
-    match config {
-        #[cfg(feature = "mamba1")]
-        MambaVocabNetConfig::Mamba1 { vocab_size, .. } => *vocab_size,
-        #[cfg(feature = "mamba2")]
-        MambaVocabNetConfig::Mamba2 { vocab_size, .. } => *vocab_size,
-        #[cfg(feature = "mamba3")]
-        MambaVocabNetConfig::Mamba3 { vocab_size, .. } => *vocab_size,
-    }
+/// Token pairs for one decode step, `[batch, 2]`.
+fn input_pair(shape: Shape, spec: &ModelSpec, device: &Device) -> Tensor<2, Int> {
+    token_pairs(&token_ids(shape.batch, spec), shape.batch, device).squeeze_dim(1)
 }
 
 // ---------------------------------------------------------------------------
@@ -546,10 +532,10 @@ fn bench_forward(
         // neither the build nor the warm-up.
         let mamba = model.get_or_insert_with(|| random_model(spec, device));
         let x = input.get_or_insert_with(|| {
-            let x = input_ids(shape, spec, device);
+            let x = input_pairs(shape, spec, device);
             // Untimed: compile (and autotune) the kernels this model needs.
             for _ in 0..warmup_iters() {
-                let (_y, _caches) = mamba.forward(x.clone(), None, ssd_path.clone(), None);
+                let (_y, _caches) = mamba.forward(x.clone(), None, ssd_path.clone(), None, None);
                 sync(device);
             }
             x
@@ -557,7 +543,7 @@ fn bench_forward(
 
         b.iter_custom(|iters| {
             timed(device, &plan, iters, || {
-                let (y, _caches) = mamba.forward(x.clone(), None, ssd_path.clone(), None);
+                let (y, _caches) = mamba.forward(x.clone(), None, ssd_path.clone(), None, None);
                 y
             })
         })
@@ -583,14 +569,10 @@ fn bench_step(
     configure(&mut group, shape.batch as u64);
     group.bench_function(spec.id, |b| {
         let mamba = model.get_or_insert_with(|| random_model(spec, device));
-        let x = input_id(shape, spec, device);
+        let x = input_pair(shape, spec, device);
 
         if caches.is_none() {
-            caches = Some(burn_mamba_example::empty_caches(
-                shape.batch,
-                &(spec.config)(),
-                device,
-            ));
+            caches = Some(burn_mamba_example::empty_caches(shape.batch, mamba));
             // Untimed: warm the decode kernels, advancing the cache as a real
             // decode would (the steady state is what the measurements then see,
             // and the cache keeps advancing across samples from here).
