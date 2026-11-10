@@ -1,18 +1,18 @@
-use crate::hub::wasm::{Api, ApiRepo, ChunkList};
+use crate::hub::wasm::{Api, ApiRepo, DownloadChunkList};
 use crate::hub::{
     Endpoint, FilePath, FileUrl, HubError, Metadata, Repo, RepoId, RepoType, RevisionPath,
     UrlTemplate,
 };
 use crate::tokenizer::Tokenizer;
-use crate::{Checkpoint, LogitsProcessorWrapper, MambaWrapper, ModelSpec, hf, load_mamba};
+use crate::{CheckpointSpec, LogitsProcessorWrapper, MambaWrapper, WeightsSource, build_network, hf};
 use burn::prelude::*;
 use burn_mamba::prelude::*;
 
 /// The checkpoint this page runs.
 ///
-/// A bundle may carry several; the UI drives one, so it takes the
+/// A bundle may carry several; the page drives one, so it takes the
 /// highest-priority compiled-in checkpoint (see [hf::preferred]).
-fn active() -> &'static ModelSpec {
+fn active() -> &'static CheckpointSpec {
     hf::preferred().expect("no checkpoint feature is enabled in this build")
 }
 
@@ -21,21 +21,22 @@ pub struct Model {
     /// Backend device.
     pub device: Device,
     /// Which checkpoint the asset cards fetch and the generation runs.
-    pub spec: &'static ModelSpec,
+    pub spec: &'static CheckpointSpec,
 
     // fetching, loading, building
-    /// Can check the cache, fetch and load data.
-    pub cache_api: Connection<Api>,
-    /// Stores cache and load status information, and also loaded bytes data.
-    pub tokenizer: ModelData,
-    /// Stores cache and load status information, and also loaded bytes data.
-    pub mamba: ModelData,
-    /// Consumes loaded bytes data to partially build the required models.
-    pub models_wrapper_builder: MambaWrapperBuilder,
+    /// Can check the hub cache, fetch and load data.
+    pub hub_api: Connection<Api>,
+    /// Stores hub cache and load status information, and also loaded bytes data.
+    pub tokenizer: Asset,
+    /// Stores hub cache and load status information, and also loaded bytes data.
+    pub weights: Asset,
+    /// Consumes loaded bytes data to build the tokenizer and the network.
+    pub wrapper_builder: MambaWrapperBuilder,
 
-    // built models
-    /// Models that are built and ready to use for inference.
-    pub models_wrapper: Option<Wrapper>,
+    // built tokenizer and network
+    /// The run wrapper with its caches and its sampler, once the tokenizer and
+    /// the network are built.
+    pub wrapper: Option<Wrapper>,
 
     // inference-related data
     /// Current user input.
@@ -52,22 +53,22 @@ pub struct Model {
     pub tokens: Vec<usize>,
     /// Current generation result (token concatenation from each generation step).
     pub output: String,
-    /// The token the model uses to signal the end of the generation.
+    /// The token the network uses to signal the end of the generation.
     pub eos_token: usize,
 }
 
 impl Model {
-    pub fn select(&self, selection: &ModelSelection) -> &ModelData {
-        match selection {
-            ModelSelection::Tokenizer => &self.tokenizer,
-            ModelSelection::Mamba => &self.mamba,
+    pub fn select(&self, kind: &AssetKind) -> &Asset {
+        match kind {
+            AssetKind::Tokenizer => &self.tokenizer,
+            AssetKind::Weights => &self.weights,
         }
     }
 
-    pub fn select_mut(&mut self, selection: &ModelSelection) -> &mut ModelData {
-        match selection {
-            ModelSelection::Tokenizer => &mut self.tokenizer,
-            ModelSelection::Mamba => &mut self.mamba,
+    pub fn select_mut(&mut self, kind: &AssetKind) -> &mut Asset {
+        match kind {
+            AssetKind::Tokenizer => &mut self.tokenizer,
+            AssetKind::Weights => &mut self.weights,
         }
     }
 }
@@ -88,10 +89,10 @@ impl Default for Model {
             device,
             spec,
             // fetching, loading, building
-            cache_api: Connection::Disconnected,
-            tokenizer: ModelData::new(
+            hub_api: Connection::Disconnected,
+            tokenizer: Asset::new(
                 "Tokenizer".into(),
-                ModelDataConfig::Huggingface(HuggingfaceConfig {
+                AssetConfig::Huggingface(HuggingfaceConfig {
                     endpoint: Endpoint::default(),
                     url_template: UrlTemplate::default(),
                     repo_id: RepoId(spec.tokenizer_repo_id.into()),
@@ -100,9 +101,9 @@ impl Default for Model {
                     filepath: FilePath(spec.file_path_tokenizer_json.into()),
                 }),
             ),
-            mamba: ModelData::new(
+            weights: Asset::new(
                 spec.display_name.into(),
-                ModelDataConfig::Huggingface(HuggingfaceConfig {
+                AssetConfig::Huggingface(HuggingfaceConfig {
                     endpoint: Endpoint::default(),
                     url_template: UrlTemplate::default(),
                     repo_id: RepoId(spec.repo_id.into()),
@@ -111,10 +112,10 @@ impl Default for Model {
                     filepath: FilePath(spec.file_path_model_safetensors.into()),
                 }),
             ),
-            models_wrapper_builder: MambaWrapperBuilder::default(),
+            wrapper_builder: MambaWrapperBuilder::default(),
 
-            // built models
-            models_wrapper: None,
+            // built tokenizer and network
+            wrapper: None,
 
             // inference-related data
             input: "Mamba is the".into(),
@@ -131,7 +132,7 @@ impl Default for Model {
 }
 
 pub struct MambaWrapperBuilder {
-    pub spec: Option<&'static ModelSpec>,
+    pub spec: Option<&'static CheckpointSpec>,
     pub tokenizer: Option<Tokenizer>,
     pub mamba: Option<MambaVocabNet>,
 }
@@ -153,24 +154,22 @@ impl MambaWrapperBuilder {
     pub fn build(self) -> Wrapper {
         self.into()
     }
-    pub fn with(&mut self, selection: &ModelSelection, data: Vec<u8>, device: &Device) {
-        match selection {
-            ModelSelection::Tokenizer => {
+    pub fn with(&mut self, kind: &AssetKind, data: Vec<u8>, device: &Device) {
+        match kind {
+            AssetKind::Tokenizer => {
                 let tokenizer = Tokenizer::from_bytes(&data).unwrap();
                 self.tokenizer = Some(tokenizer);
             }
-            ModelSelection::Mamba => {
+            AssetKind::Weights => {
                 let mamba = {
                     let timing = web_time::Instant::now();
-                    log::info!("initializing and loading mamba model");
+                    log::info!("building the network");
 
-                    let spec = self.spec.expect("missing model spec");
+                    let spec = self.spec.expect("missing checkpoint spec");
                     let mamba =
-                        load_mamba(Checkpoint::Bytes(data), (spec.config)(), device).unwrap();
-                    log::info!(
-                        "mamba initialized and loaded in {}ms",
-                        timing.elapsed().as_millis()
-                    );
+                        build_network(WeightsSource::Bytes(data), (spec.topology)(), device)
+                            .unwrap();
+                    log::info!("built the network in {}ms", timing.elapsed().as_millis());
 
                     mamba
                 };
@@ -191,10 +190,10 @@ impl From<MambaWrapperBuilder> for Wrapper {
     fn from(value: MambaWrapperBuilder) -> Self {
         match (value.spec, value.tokenizer, value.mamba) {
             (Some(s), Some(t), Some(m)) => {
-                let models = MambaWrapper::new(s, t, m);
-                Wrapper::new(models)
+                let run_wrapper = MambaWrapper::new(s, t, m);
+                Wrapper::new(run_wrapper)
             }
-            (None, _, _) => panic!("missing model spec"),
+            (None, _, _) => panic!("missing checkpoint spec"),
             (_, None, _) => panic!("missing tokenizer"),
             (_, _, None) => panic!("missing mamba"),
         }
@@ -227,16 +226,16 @@ impl<T> Connection<T> {
 }
 
 pub struct Wrapper {
-    pub models: MambaWrapper,
+    pub run_wrapper: MambaWrapper,
     pub caches: MambaCaches,
     pub processor: LogitsProcessorWrapper,
 }
 
 impl Wrapper {
-    pub fn new(models: MambaWrapper) -> Self {
-        let caches = models.empty_caches(1).unwrap();
+    pub fn new(run_wrapper: MambaWrapper) -> Self {
+        let caches = run_wrapper.empty_caches(1).unwrap();
         Self {
-            models,
+            run_wrapper,
             caches,
             processor: LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024),
         }
@@ -244,78 +243,82 @@ impl Wrapper {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ModelData {
+pub struct Asset {
     pub label: String,
-    pub config: ModelDataConfig,
+    pub config: AssetConfig,
     pub load: Load,
-    pub cache: Cache,
+    pub hub_cache: HubCacheState,
 }
 
-impl ModelData {
-    pub fn new(label: String, config: ModelDataConfig) -> Self {
+impl Asset {
+    pub fn new(label: String, config: AssetConfig) -> Self {
         Self {
             label,
             config,
             load: Load::default(),
-            cache: Cache::default(),
+            hub_cache: HubCacheState::default(),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ModelSelection {
+pub enum AssetKind {
     Tokenizer,
-    Mamba,
+    Weights,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum ModelDataConfig {
+pub enum AssetConfig {
     Huggingface(HuggingfaceConfig),
     Custom(CustomConfig),
 }
 
-impl ModelDataConfig {
+impl AssetConfig {
     pub fn api_repo(&self, api: &Api) -> ApiRepo {
         match &self {
-            ModelDataConfig::Custom(_) => {
+            AssetConfig::Custom(_) => {
                 todo!()
             }
-            ModelDataConfig::Huggingface(hf) => hf.api_repo(api),
+            AssetConfig::Huggingface(hf) => hf.api_repo(api),
         }
     }
 
     pub fn file_url(&self) -> FileUrl {
         match &self {
-            ModelDataConfig::Custom(_) => {
+            AssetConfig::Custom(_) => {
                 todo!()
             }
-            ModelDataConfig::Huggingface(hf) => hf.file_url(),
+            AssetConfig::Huggingface(hf) => hf.file_url(),
         }
     }
 
     pub fn file_path(&self) -> &FilePath {
         match &self {
-            ModelDataConfig::Custom(_) => {
+            AssetConfig::Custom(_) => {
                 todo!()
             }
-            ModelDataConfig::Huggingface(hf) => &hf.filepath,
+            AssetConfig::Huggingface(hf) => &hf.filepath,
         }
     }
 
     pub async fn metadata(&self, api: &Api) -> Result<Metadata, HubError> {
         match &self {
-            ModelDataConfig::Custom(_) => {
+            AssetConfig::Custom(_) => {
                 todo!()
             }
-            ModelDataConfig::Huggingface(hf) => hf.metadata(api).await,
+            AssetConfig::Huggingface(hf) => hf.metadata(api).await,
         }
     }
-    pub async fn check(&self, api: &Api, metadata: &Metadata) -> Result<ChunkList, HubError> {
+    pub async fn check(
+        &self,
+        api: &Api,
+        metadata: &Metadata,
+    ) -> Result<DownloadChunkList, HubError> {
         match &self {
-            ModelDataConfig::Custom(_) => {
+            AssetConfig::Custom(_) => {
                 todo!()
             }
-            ModelDataConfig::Huggingface(hf) => hf.check(api, metadata).await,
+            AssetConfig::Huggingface(hf) => hf.check(api, metadata).await,
         }
     }
 }
@@ -347,7 +350,11 @@ impl HuggingfaceConfig {
         let file_url = api_repo.url(&self.filepath);
         api.metadata(&file_url).await
     }
-    pub async fn check(&self, api: &Api, metadata: &Metadata) -> Result<ChunkList, HubError> {
+    pub async fn check(
+        &self,
+        api: &Api,
+        metadata: &Metadata,
+    ) -> Result<DownloadChunkList, HubError> {
         self.api_repo(api).check(metadata).await
     }
 }
@@ -375,14 +382,14 @@ impl Default for Load {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Cache {
+pub struct HubCacheState {
     pub is_checking: bool,
     pub is_done: bool,
     pub is_busy: bool,
-    pub fetching: CacheFetch,
+    pub fetching: FetchState,
 }
 
-impl Default for Cache {
+impl Default for HubCacheState {
     fn default() -> Self {
         Self {
             is_checking: true,
@@ -394,9 +401,9 @@ impl Default for Cache {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct CacheFetch {
-    pub current_chunk: usize,
+pub struct FetchState {
+    pub current_download_chunk: usize,
     pub metadata: Option<Metadata>,
-    pub chunk_list: ChunkList, // pub total_chunk: usize,
-                               // pub total_bytes: usize,
+    pub download_chunk_list: DownloadChunkList, // pub total_chunk: usize,
+                                                // pub total_bytes: usize,
 }

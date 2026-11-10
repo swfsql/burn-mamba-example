@@ -19,21 +19,21 @@ use burn::store::{
 };
 use burn_mamba::prelude::*;
 
-/// Where the checkpoint bytes come from.
-pub enum Checkpoint {
+/// Where the bytes of the weights file of a checkpoint come from.
+pub enum WeightsSource {
     /// A `model.safetensors` on disk; memory-mapped by the store.
     #[cfg(not(target_arch = "wasm32"))]
     File(std::path::PathBuf),
-    /// Already-downloaded bytes (the browser has no filesystem).
+    /// Bytes that are already in memory (the browser has no filesystem).
     Bytes(Vec<u8>),
 }
 
-impl Checkpoint {
+impl WeightsSource {
     fn store(self) -> SafetensorsStore {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
-            Checkpoint::File(path) => SafetensorsStore::from_file(path),
-            Checkpoint::Bytes(bytes) => SafetensorsStore::from_bytes(Some(bytes)),
+            WeightsSource::File(path) => SafetensorsStore::from_file(path),
+            WeightsSource::Bytes(bytes) => SafetensorsStore::from_bytes(Some(bytes)),
         }
     }
 }
@@ -49,16 +49,16 @@ const ALLOWED_MISSING: &[&str] = &[
     "flag_head.bias",
 ];
 
-/// Builds the model from `mamba_config` and overwrites every parameter from the
+/// Builds the network from `topology` and overwrites every parameter from the
 /// checkpoint, then ties the LM head to the (transposed) embedding.
-pub fn load_mamba(
-    checkpoint: Checkpoint,
-    mamba_config: MambaVocabNetConfig,
+pub fn build_network(
+    weights: WeightsSource,
+    topology: MambaVocabNetConfig,
     device: &Device,
 ) -> anyhow::Result<MambaVocabNet> {
-    let mut mamba: MambaVocabNet = mamba_config.init(device);
+    let mut mamba: MambaVocabNet = topology.init(device);
 
-    let mut store = checkpoint
+    let mut store = weights
         .store()
         // `MambaBlock` is an enum module: drop its `Mamba1`/`Mamba2`/`Mamba3`
         // variant segment, so the checkpoint paths line up with the block.
@@ -69,7 +69,7 @@ pub fn load_mamba(
         .with_from_adapter(
             PyTorchToBurnAdapter.chain(FloatCastAdapter::to(crate::PRECISION_FLOAT_D_TYPE.into())),
         );
-    for (from, to) in key_remapping(&mamba_config) {
+    for (from, to) in key_remapping(&topology) {
         store = store.with_key_remapping(from, to);
     }
 
@@ -108,7 +108,7 @@ pub fn load_mamba(
 /// expand `layers.{i}.mixer` into `layers.real_layers.{i}.block`. The
 /// per-parameter renames then operate on the rewritten paths. The family of the
 /// block config selects the per-parameter renames.
-fn key_remapping(config: &MambaVocabNetConfig) -> Vec<(&'static str, &'static str)> {
+fn key_remapping(topology: &MambaVocabNetConfig) -> Vec<(&'static str, &'static str)> {
     let mut rules: Vec<(&'static str, &'static str)> = vec![
         // backbone.layers.{i}.mixer.X -> layers.real_layers.{i}.block.X
         (
@@ -125,7 +125,7 @@ fn key_remapping(config: &MambaVocabNetConfig) -> Vec<(&'static str, &'static st
         (r"(^|\.)norm(_f|2)?\.weight$", "${1}norm${2}.gamma"),
     ];
 
-    match &config.block {
+    match &topology.block {
         #[cfg(feature = "mamba1")]
         MambaBlockConfig::Mamba1(_) => {
             rules.push((r"\.block\.A_log$", ".block.a_log"));
@@ -166,7 +166,7 @@ fn key_remapping(config: &MambaVocabNetConfig) -> Vec<(&'static str, &'static st
 /// so the head is the transposed embedding table.
 ///
 /// It is public because it is the second half of the build of a runnable
-/// model. A build without a checkpoint must also call it. `benches/model.rs`
+/// network. A build without a checkpoint must also call it. `benches/model.rs`
 /// builds the same topology on random weights. Without this head, it measures
 /// the tied head of the vocab network, which transposes the embedding at each
 /// call.
@@ -210,7 +210,7 @@ mod tests {
     /// One checkpoint's vendored `model.safetensors` header.
     struct Vendored {
         /// The checkpoint it was read from.
-        spec: &'static crate::ModelSpec,
+        spec: &'static crate::CheckpointSpec,
         /// Everything outside `backbone.layers.`, plus the whole of layer 0.
         /// Every layer repeats layer 0's names and shapes, which is what lets
         /// one layer stand for all of them.
@@ -289,8 +289,8 @@ mod tests {
         ("backbone.layers.0.mlp.fc2.weight", &[768, 1280]),
     ];
 
-    /// Every checkpoint this build compiled in, whatever set of model features
-    /// that is.
+    /// Every checkpoint of the families that this build compiles, whatever set
+    /// of family features that is.
     const VENDORED: &[Vendored] = &[
         #[cfg(feature = "mamba1")]
         Vendored {
@@ -334,11 +334,11 @@ mod tests {
     }
 
     /// One layer and a token-sized vocabulary: the parameter *paths* depend on
-    /// neither, so the comparison runs on a model small enough to build.
-    fn one_layer(mut config: MambaVocabNetConfig) -> MambaVocabNetConfig {
-        config.shape.stack.n_real_layers = 1;
-        config.shape.vocab_size = TEST_VOCAB;
-        config
+    /// neither, so the comparison runs on a network small enough to build.
+    fn one_layer(mut topology: MambaVocabNetConfig) -> MambaVocabNetConfig {
+        topology.shape.stack.n_real_layers = 1;
+        topology.shape.vocab_size = TEST_VOCAB;
+        topology
     }
 
     /// The checkpoint names, pushed through [`key_remapping`] exactly as
@@ -346,8 +346,8 @@ mod tests {
     ///
     /// Two names remapping onto one parameter is a panic: the second would
     /// overwrite the first, leaving whichever lost silently unloaded.
-    fn remapped(manifest: Manifest, config: &MambaVocabNetConfig) -> Remapped {
-        let rules = key_remapping(config);
+    fn remapped(manifest: Manifest, topology: &MambaVocabNetConfig) -> Remapped {
+        let rules = key_remapping(topology);
         let patterns = burn::store::KeyRemapper::from_patterns(rules.clone())
             .expect("the remapping patterns must compile")
             .to_regex_pairs();
@@ -384,10 +384,10 @@ mod tests {
     }
 
     /// The parameters the built module actually exposes to the store.
-    fn module_params(config: &MambaVocabNetConfig) -> BTreeMap<String, Vec<usize>> {
+    fn module_params(topology: &MambaVocabNetConfig) -> BTreeMap<String, Vec<usize>> {
         let device: Device = Default::default();
-        let model = config.init(&device);
-        model
+        let network = topology.init(&device);
+        network
             .collect(None, None, true)
             .into_iter()
             .map(|tensor| (tensor.name, tensor.shape.to_vec()))
@@ -401,24 +401,24 @@ mod tests {
     fn checkpoints_and_modules_hold_the_same_tensors() {
         for vendored in VENDORED {
             let id = vendored.spec.id;
-            let full = (vendored.spec.config)();
-            let config = one_layer(full.clone());
-            let mut expected = remapped(vendored.manifest, &config).params;
+            let full = (vendored.spec.topology)();
+            let topology = one_layer(full.clone());
+            let mut expected = remapped(vendored.manifest, &topology).params;
 
             // The one shape the shrunken topology cannot be compared against
             // directly — and the checkpoint's own row count is the check on
-            // `pad_vocab_size_multiple`, which differs between models.
+            // `pad_vocab_size_multiple`, which differs between checkpoints.
             let embedding = expected
                 .get_mut("embedding.weight")
                 .unwrap_or_else(|| panic!("{id}: the embedding must remap to `embedding.weight`"));
             assert_eq!(
                 embedding[0],
                 crate::padded_vocab_size(&full),
-                "{id}: the config's padded vocabulary must match the checkpoint's embedding"
+                "{id}: the topology's padded vocabulary must match the checkpoint's embedding"
             );
             embedding[0] = TEST_VOCAB;
 
-            let actual = module_params(&config);
+            let actual = module_params(&topology);
             let expected_keys: BTreeSet<&str> = expected.keys().map(String::as_str).collect();
             let actual_keys: BTreeSet<&str> = actual.keys().map(String::as_str).collect();
             let dangling: Vec<&str> = expected_keys.difference(&actual_keys).copied().collect();
@@ -446,8 +446,8 @@ mod tests {
     fn remapping_rules_all_fire() {
         for vendored in VENDORED {
             let id = vendored.spec.id;
-            let config = one_layer((vendored.spec.config)());
-            let unused: Vec<&str> = remapped(vendored.manifest, &config)
+            let topology = one_layer((vendored.spec.topology)());
+            let unused: Vec<&str> = remapped(vendored.manifest, &topology)
                 .rule_hits
                 .into_iter()
                 .filter(|(_, hits)| *hits == 0)

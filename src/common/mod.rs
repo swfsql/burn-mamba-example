@@ -6,7 +6,7 @@ pub mod token_output_stream;
 pub mod tokenizer;
 
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
-pub use store_load::{Checkpoint, load_mamba, tie_lm_head};
+pub use store_load::{WeightsSource, build_network, tie_lm_head};
 
 #[allow(unused_imports)]
 use burn::prelude::*;
@@ -25,16 +25,17 @@ use burn::tensor::{FloatDType, IntDType};
 pub const PRECISION_FLOAT_D_TYPE: FloatDType = FloatDType::F32;
 pub const PRECISION_INT_D_TYPE: IntDType = IntDType::I32;
 
-/// One compiled-in checkpoint: everything an entry point needs to fetch, build
-/// and label a model, as plain data.
+/// One compiled-in checkpoint: everything an entry point needs to fetch its
+/// files, build its network and label it, as plain data.
 ///
-/// Any number of model features may be enabled at once; [hf::MODELS] is the
-/// resulting runtime list (highest priority first) and [hf::preferred] is what
-/// an entry point that runs a single model picks.
+/// Any number of checkpoint features may be enabled at once; [hf::CHECKPOINTS]
+/// is the resulting runtime list (highest priority first) and [hf::preferred]
+/// is what an entry point that runs a single checkpoint picks.
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 #[derive(Clone, Copy, Debug)]
-pub struct ModelSpec {
-    /// Selection name; matches the cargo feature and the `frontend/` directory.
+pub struct CheckpointSpec {
+    /// The checkpoint id. It is also the checkpoint feature, the `frontend/`
+    /// directory, the `MAMBA_CHECKPOINT` value and the bench case name.
     pub id: &'static str,
     /// Human-readable name, for logs and the browser UI's asset card.
     pub display_name: &'static str,
@@ -49,7 +50,7 @@ pub struct ModelSpec {
     /// A [hub::FilePath].
     pub file_path_tokenizer_json: &'static str,
     /// The hardcoded topology, mirroring the checkpoint's `config.json`.
-    pub config: fn() -> MambaVocabNetConfig,
+    pub topology: fn() -> MambaVocabNetConfig,
     /// The scan the parallel path takes, including the chunk length the
     /// checkpoint was trained with.
     pub ssd_path: fn() -> MambaSsdPath,
@@ -57,43 +58,49 @@ pub struct ModelSpec {
 
 pub mod hf {
     #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
-    use crate::ModelSpec;
+    use crate::CheckpointSpec;
 
     /// Every checkpoint compiled into this build, **highest priority first**.
     ///
-    /// The order is the priority: mamba3-mimo > mamba3-siso > mamba2 > mamba1.
+    /// The order is the priority: mamba3-mimo-187m > mamba3-siso-187m >
+    /// mamba2-130m > mamba1-130m.
+    ///
+    /// A family feature compiles the spec of each checkpoint of its family, so
+    /// the tests can check each of them. Only a checkpoint feature adds an entry
+    /// to this list, and an entry point runs only an entry of this list.
     #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
-    pub const MODELS: &[&ModelSpec] = &[
-        #[cfg(feature = "mamba3-mimo")]
+    pub const CHECKPOINTS: &[&CheckpointSpec] = &[
+        #[cfg(feature = "mamba3-mimo-187m")]
         &mamba3_mimo_187m::SPEC,
-        #[cfg(feature = "mamba3-siso")]
+        #[cfg(feature = "mamba3-siso-187m")]
         &mamba3_siso_187m::SPEC,
-        #[cfg(feature = "mamba2")]
+        #[cfg(feature = "mamba2-130m")]
         &mamba2_130m::SPEC,
-        #[cfg(feature = "mamba1")]
+        #[cfg(feature = "mamba1-130m")]
         &mamba1_130m::SPEC,
     ];
 
-    /// The checkpoint to use when exactly one model should run: the
-    /// highest-priority entry of [MODELS].
+    /// The checkpoint to use when exactly one checkpoint should run: the
+    /// highest-priority entry of [CHECKPOINTS].
     ///
-    /// [None] only for a build with no checkpoint feature — `mamba3` on its own
-    /// enables the blocks but neither 187m topology.
+    /// [None] only for a build with no checkpoint feature — a family feature on
+    /// its own enables the blocks but no checkpoint.
     #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
-    pub fn preferred() -> Option<&'static ModelSpec> {
-        MODELS.first().copied()
+    pub fn preferred() -> Option<&'static CheckpointSpec> {
+        CHECKPOINTS.first().copied()
     }
 
-    /// Looks a compiled-in checkpoint up by [ModelSpec::id].
+    /// Looks a compiled-in checkpoint up by [CheckpointSpec::id].
     #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
-    pub fn by_id(id: &str) -> Option<&'static ModelSpec> {
-        MODELS.iter().copied().find(|model| model.id == id)
+    pub fn by_id(id: &str) -> Option<&'static CheckpointSpec> {
+        CHECKPOINTS.iter().copied().find(|spec| spec.id == id)
     }
 
-    /// The [ModelSpec::id] of every compiled-in checkpoint, for error messages.
+    /// The [CheckpointSpec::id] of every compiled-in checkpoint, for error
+    /// messages.
     #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
     pub fn ids() -> Vec<&'static str> {
-        MODELS.iter().map(|model| model.id).collect()
+        CHECKPOINTS.iter().map(|spec| spec.id).collect()
     }
 
     /// The layer stack of the reference `MixerModel` (`mixer_seq_simple.py` of
@@ -165,16 +172,17 @@ pub mod hf {
         use burn_mamba::mamba1;
         use burn_mamba::prelude::*;
 
-        /// This checkpoint's entry in [super::MODELS].
-        pub const SPEC: crate::ModelSpec = crate::ModelSpec {
-            id: "mamba1",
+        /// This checkpoint's entry in [super::CHECKPOINTS] — only listed there
+        /// under its own checkpoint feature, `mamba1-130m`.
+        pub const SPEC: crate::CheckpointSpec = crate::CheckpointSpec {
+            id: "mamba1-130m",
             display_name: DISPLAY_NAME,
             repo_id: REPO_ID,
             revision_path: REVISION_PATH,
             file_path_model_safetensors: FILE_PATH_MODEL_SAFETENSORS,
             tokenizer_repo_id: tokenizer_source::REPO_ID,
             file_path_tokenizer_json: tokenizer_source::FILE_PATH_TOKENIZER_JSON,
-            config,
+            topology,
             ssd_path,
         };
 
@@ -200,7 +208,7 @@ pub mod hf {
         pub const N_LAYER: usize = 24;
         pub const D_MODEL: usize = 768;
 
-        pub fn config() -> MambaVocabNetConfig {
+        pub fn topology() -> MambaVocabNetConfig {
             MambaVocabNetConfig {
                 shape: VocabShape {
                     vocab_size: VOCAB_SIZE, // vocab_size: 50277
@@ -243,16 +251,17 @@ pub mod hf {
         use burn_mamba::mamba2;
         use burn_mamba::prelude::*;
 
-        /// This checkpoint's entry in [super::MODELS].
-        pub const SPEC: crate::ModelSpec = crate::ModelSpec {
-            id: "mamba2",
+        /// This checkpoint's entry in [super::CHECKPOINTS] — only listed there
+        /// under its own checkpoint feature, `mamba2-130m`.
+        pub const SPEC: crate::CheckpointSpec = crate::CheckpointSpec {
+            id: "mamba2-130m",
             display_name: DISPLAY_NAME,
             repo_id: REPO_ID,
             revision_path: REVISION_PATH,
             file_path_model_safetensors: FILE_PATH_MODEL_SAFETENSORS,
             tokenizer_repo_id: tokenizer_source::REPO_ID,
             file_path_tokenizer_json: tokenizer_source::FILE_PATH_TOKENIZER_JSON,
-            config,
+            topology,
             ssd_path,
         };
 
@@ -278,7 +287,7 @@ pub mod hf {
         pub const N_LAYER: usize = 24;
         pub const D_MODEL: usize = 768;
 
-        pub fn config() -> MambaVocabNetConfig {
+        pub fn topology() -> MambaVocabNetConfig {
             MambaVocabNetConfig {
                 shape: VocabShape {
                     vocab_size: VOCAB_SIZE, // vocab_size: 50277
@@ -319,7 +328,7 @@ pub mod hf {
     ///
     /// Both are 12 layers of `Mamba3` mixer + SwiGLU MLP over the Llama-3.1
     /// vocabulary, and differ only in `mimo_rank`, `d_intermediate` and the
-    /// checkpoint's `chunk_size`. The fields below mirror their `config.json`;
+    /// chunk length (`chunk_size` in `config.json`). The fields below mirror their `config.json`;
     /// `is_outproj_norm: false` and `attn_layer_idx: []` in both, so there is no
     /// `out_norm` and no attention layer to model.
     #[cfg(feature = "mamba3")]
@@ -331,7 +340,7 @@ pub mod hf {
             display_name = $display_name:literal,
             d_intermediate = $d_intermediate:expr,
             mimo_rank = $mimo_rank:expr,
-            chunk_size = $chunk_size:expr,
+            chunk_len = $chunk_len:expr,
         ) => {
             pub mod $module {
                 #[allow(unused_imports)]
@@ -339,10 +348,10 @@ pub mod hf {
                 use burn_mamba::mamba3;
                 use burn_mamba::prelude::*;
 
-                /// This checkpoint's entry in [super::MODELS] — only listed
-                /// there under this topology's own feature, since `mamba3`
-                /// alone picks neither.
-                pub const SPEC: crate::ModelSpec = crate::ModelSpec {
+                /// This checkpoint's entry in [super::CHECKPOINTS] — only
+                /// listed there under its own checkpoint feature, since
+                /// `mamba3` alone picks neither.
+                pub const SPEC: crate::CheckpointSpec = crate::CheckpointSpec {
                     id: $id,
                     display_name: DISPLAY_NAME,
                     repo_id: REPO_ID,
@@ -350,7 +359,7 @@ pub mod hf {
                     file_path_model_safetensors: FILE_PATH_MODEL_SAFETENSORS,
                     tokenizer_repo_id: tokenizer_source::REPO_ID,
                     file_path_tokenizer_json: tokenizer_source::FILE_PATH_TOKENIZER_JSON,
-                    config,
+                    topology,
                     ssd_path,
                 };
 
@@ -379,7 +388,7 @@ pub mod hf {
                 pub const D_INTERMEDIATE: usize = $d_intermediate;
                 pub const MIMO_RANK: usize = $mimo_rank;
                 /// The SSD chunk length the checkpoint was trained with.
-                pub const CHUNK_SIZE: usize = $chunk_size;
+                pub const CHUNK_LEN: usize = $chunk_len;
 
                 /// The SwiGLU feed-forward of each layer: the reference
                 /// `GatedMLP` (`mlp.py`). It rounds `d_intermediate` up to a
@@ -394,7 +403,7 @@ pub mod hf {
                     }
                 }
 
-                pub fn config() -> MambaVocabNetConfig {
+                pub fn topology() -> MambaVocabNetConfig {
                     MambaVocabNetConfig {
                         shape: VocabShape {
                             vocab_size: VOCAB_SIZE, // vocab_size: 128256
@@ -450,7 +459,7 @@ pub mod hf {
                 }
 
                 pub fn ssd_path() -> MambaSsdPath {
-                    MambaSsdPath::Mamba3(Mamba3SsdPath::SerialRecalculated(Some(CHUNK_SIZE)))
+                    MambaSsdPath::Mamba3(Mamba3SsdPath::SerialRecalculated(Some(CHUNK_LEN)))
                 }
             }
         };
@@ -459,35 +468,35 @@ pub mod hf {
     #[cfg(feature = "mamba3")]
     mamba3_187m!(
         mamba3_siso_187m,
-        id = "mamba3-siso",
+        id = "mamba3-siso-187m",
         repo = "state-spaces/mamba3-siso-187m",
         display_name = "Mamba3-SISO-187m",
         d_intermediate = 1536, // d_intermediate: 1536
         // `is_mimo: false`, and then `Mamba3.__init__` sets `mimo_rank = 1`.
         mimo_rank = 1,
-        chunk_size = 64, // chunk_size: 64
+        chunk_len = 64, // chunk_size: 64
     );
 
     #[cfg(feature = "mamba3")]
     mamba3_187m!(
         mamba3_mimo_187m,
-        id = "mamba3-mimo",
+        id = "mamba3-mimo-187m",
         repo = "state-spaces/mamba3-mimo-187m",
         display_name = "Mamba3-MIMO-187m",
         d_intermediate = 1264, // d_intermediate: 1264
         mimo_rank = 4,         // is_mimo: true, mimo_rank: 4
-        chunk_size = 16,       // chunk_size: 16
+        chunk_len = 16,        // chunk_size: 16
     );
 }
 
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 pub struct MambaWrapper {
     /// Which checkpoint this is — the run modes read the topology and the scan
-    /// path from it, so a build carrying several models keeps them apart.
-    pub spec: &'static ModelSpec,
+    /// path from it, so a build carrying several checkpoints keeps them apart.
+    pub spec: &'static CheckpointSpec,
     pub tokenizer: TokenOutputStream,
     pub mamba: MambaVocabNet,
-    pub mamba_config: MambaVocabNetConfig,
+    pub topology: MambaVocabNetConfig,
 }
 
 pub struct LogitsProcessorWrapper {
@@ -498,12 +507,12 @@ pub struct LogitsProcessorWrapper {
 
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 impl MambaWrapper {
-    pub fn new(spec: &'static ModelSpec, tokenizer: Tokenizer, mamba: MambaVocabNet) -> Self {
+    pub fn new(spec: &'static CheckpointSpec, tokenizer: Tokenizer, mamba: MambaVocabNet) -> Self {
         Self {
             spec,
             tokenizer: TokenOutputStream::new(tokenizer),
             mamba,
-            mamba_config: (spec.config)(),
+            topology: (spec.topology)(),
         }
     }
 
@@ -679,7 +688,7 @@ impl MambaWrapper {
 
     /// The width of the vocab logits. The flag logit is not part of it.
     pub fn padded_vocab_size(&self) -> usize {
-        padded_vocab_size(&self.mamba_config)
+        padded_vocab_size(&self.topology)
     }
 
     /// Drops the flag logit, which is the last column of the logits of the
@@ -750,20 +759,20 @@ impl LogitsProcessorWrapper {
 }
 
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
-pub fn device(model: &MambaVocabNet) -> Device {
-    model.embedding.weight.device()
+pub fn device(mamba: &MambaVocabNet) -> Device {
+    mamba.embedding.weight.device()
 }
 
-/// The vocabulary size of `config`, rounded up to a multiple of its
+/// The vocabulary size of `topology`, rounded up to a multiple of its
 /// `pad_vocab_size_multiple`. It is the row count of the embedding, and the
 /// width of the vocab logits.
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
-pub fn padded_vocab_size(config: &MambaVocabNetConfig) -> usize {
+pub fn padded_vocab_size(topology: &MambaVocabNetConfig) -> usize {
     let VocabShape {
         vocab_size,
         pad_vocab_size_multiple,
         ..
-    } = &config.shape;
+    } = &topology.shape;
     vocab_size.div_ceil(*pad_vocab_size_multiple) * pad_vocab_size_multiple
 }
 
@@ -794,17 +803,23 @@ pub fn empty_caches(batch: usize, mamba: &MambaVocabNet) -> MambaCaches {
     mamba.layers.zero_caches_2d(&x_bd)
 }
 
-/// Checks the compiled-in checkpoint list, whatever set of model features this
-/// build happens to enable.
+/// Checks the compiled-in checkpoint list, whatever set of checkpoint features
+/// this build happens to enable.
 #[cfg(all(test, any(feature = "mamba1", feature = "mamba2", feature = "mamba3")))]
 mod tests {
     use super::*;
 
-    /// Highest priority first, and every [ModelSpec::id] resolvable — that
-    /// ordering is what the entry points take when they run a single model.
+    /// Highest priority first, and every [CheckpointSpec::id] resolvable — that
+    /// ordering is what the entry points take when they run a single
+    /// checkpoint.
     #[test]
-    fn models_are_listed_by_descending_priority() {
-        const PRIORITY: [&str; 4] = ["mamba3-mimo", "mamba3-siso", "mamba2", "mamba1"];
+    fn checkpoints_are_listed_by_descending_priority() {
+        const PRIORITY: [&str; 4] = [
+            "mamba3-mimo-187m",
+            "mamba3-siso-187m",
+            "mamba2-130m",
+            "mamba1-130m",
+        ];
 
         let ids = hf::ids();
         let ranks: Vec<usize> = ids
@@ -822,9 +837,9 @@ mod tests {
         );
 
         for id in &ids {
-            assert_eq!(hf::by_id(id).map(|model| model.id), Some(*id));
+            assert_eq!(hf::by_id(id).map(|spec| spec.id), Some(*id));
         }
-        assert_eq!(hf::preferred().map(|model| model.id), ids.first().copied());
+        assert_eq!(hf::preferred().map(|spec| spec.id), ids.first().copied());
     }
 
     /// The two Mamba-3 checkpoints were trained with different chunk lengths, so
@@ -832,19 +847,19 @@ mod tests {
     /// keeps them apart.
     #[cfg(feature = "mamba3")]
     #[test]
-    fn each_mamba3_checkpoint_keeps_its_own_chunk_size() {
+    fn each_mamba3_checkpoint_keeps_its_own_chunk_len() {
         let checkpoints = [
-            (hf::mamba3_siso_187m::SPEC, hf::mamba3_siso_187m::CHUNK_SIZE),
-            (hf::mamba3_mimo_187m::SPEC, hf::mamba3_mimo_187m::CHUNK_SIZE),
+            (hf::mamba3_siso_187m::SPEC, hf::mamba3_siso_187m::CHUNK_LEN),
+            (hf::mamba3_mimo_187m::SPEC, hf::mamba3_mimo_187m::CHUNK_LEN),
         ];
         assert_ne!(checkpoints[0].1, checkpoints[1].1);
 
-        for (spec, chunk_size) in checkpoints {
+        for (spec, chunk_len) in checkpoints {
             let path = (spec.ssd_path)();
             let MambaSsdPath::Mamba3(Mamba3SsdPath::SerialRecalculated(Some(got))) = path else {
                 panic!("{}: expected a chunked Mamba-3 scan, got {path:?}", spec.id)
             };
-            assert_eq!(got, chunk_size, "{}", spec.id);
+            assert_eq!(got, chunk_len, "{}", spec.id);
         }
     }
 
@@ -870,9 +885,9 @@ mod tests {
 
         for spec in [hf::mamba3_siso_187m::SPEC, hf::mamba3_mimo_187m::SPEC] {
             let id = spec.id;
-            let config = (spec.config)();
+            let topology = (spec.topology)();
             #[allow(irrefutable_let_patterns)]
-            let MambaBlockConfig::Mamba3(block) = &config.block else {
+            let MambaBlockConfig::Mamba3(block) = &topology.block else {
                 panic!("{id}: expected a Mamba-3 block config")
             };
             assert_eq!(block.rotation, RotationKind::Complex2D, "{id}: rotation kind");

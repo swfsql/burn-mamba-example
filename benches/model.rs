@@ -9,16 +9,17 @@
 //! | `forward` | one chunkwise pass over `[batch, sequence, 2]` token pairs | `run_parallel` |
 //! | `step`    | one recurrent decode step from the previous step's cache | `run_sequential` |
 //!
-//! Cases are the [`ModelSpec::id`]s of [`hf::MODELS`] — `mamba1`, `mamba2`,
-//! `mamba3-siso`, `mamba3-mimo` — so a build decides what gets measured by its
-//! model features, exactly as it decides what the binary can run. Each case uses
-//! that checkpoint's own [`ModelSpec::config`] and [`ModelSpec::ssd_path`],
-//! unmodified: the real layer count, `d_model`, vocabulary, MIMO rank and
-//! trained SSD chunk length.
+//! Cases are the [`CheckpointSpec::id`]s of [`hf::CHECKPOINTS`] —
+//! `mamba1-130m`, `mamba2-130m`, `mamba3-siso-187m`, `mamba3-mimo-187m` — so a
+//! build decides what gets measured by its checkpoint features, exactly as it
+//! decides what the binary can run. Each case uses that checkpoint's own
+//! [`CheckpointSpec::topology`] and [`CheckpointSpec::ssd_path`], unmodified:
+//! the real layer count, `d_model`, vocabulary, MIMO rank and trained SSD chunk
+//! length.
 //!
 //! ## Random weights
 //!
-//! The weights are `config().init(&device)`'s random initialisation, not the HF
+//! The weights are `topology().init(&device)`'s random initialisation, not the HF
 //! checkpoint — the timings depend on the shapes, not the values, and this keeps
 //! the bench a ~2s startup instead of a ~500MB download. The topology is the
 //! deployed one all the same, including [`tie_lm_head`]: the checkpoints set
@@ -26,7 +27,7 @@
 //! embedding. Skipping that would silently measure the untied fallback, which
 //! re-transposes a `[padded_vocab, d_model]` table on every single call.
 //!
-//! One model per checkpoint serves both groups, and is dropped before the next
+//! One network per checkpoint serves both groups, and is dropped before the next
 //! checkpoint's is built: the two Mamba-3 187m nets are ~1.1GB of f32 parameters
 //! each once the head is materialised, so holding all four at once needs ~3.6GB
 //! of device memory for no benefit.
@@ -35,11 +36,11 @@
 //!
 //! ```bash
 //! cargo bench --bench model --no-default-features \
-//!   --features "backend-flex,backend-simd,mamba1,mamba2,mamba3-siso,mamba3-mimo"
+//!   --features "backend-flex,backend-simd,mamba1-130m,mamba2-130m,mamba3-siso-187m,mamba3-mimo-187m"
 //!
 //! # CUDA as deployed — kernel fusion and autotuning on:
 //! BURN_DEVICE=cuda cargo bench --bench model --no-default-features \
-//!   --features "backend-cuda,backend-fusion,backend-autotune,mamba1,mamba2,mamba3-siso,mamba3-mimo"
+//!   --features "backend-cuda,backend-fusion,backend-autotune,mamba1-130m,mamba2-130m,mamba3-siso-187m,mamba3-mimo-187m"
 //! ```
 //!
 //! Several backends can be compiled in at once and `BURN_DEVICE` picks one at
@@ -84,9 +85,9 @@
 //! generation itself is paced: both run modes read the logits back before they
 //! can issue the next call.
 //!
-//! Criterion re-enters the benchmark closure once per sample, so the model, its
+//! Criterion re-enters the benchmark closure once per sample, so the network, its
 //! input and the warm-up are built there on the first call and kept for the rest
-//! — lazily, which is also what keeps a filtered run (`-- mamba2`) from building
+//! — lazily, which is also what keeps a filtered run (`-- mamba2-130m`) from building
 //! or warming up anything else. That is what lets [`kernels.sh`] attribute kernel
 //! launches to a single case: it reads the summary tables cubecl flushes on each
 //! sync, running with `BENCH_WARMUP_ITERS=1` and `BENCH_SYNC_EVERY=0` under
@@ -107,12 +108,12 @@
 //!
 //! ```bash
 //! BENCH_SEQ=1024 cargo bench --bench model --no-default-features \
-//!   --features "backend-cuda,mamba2" -- forward
+//!   --features "backend-cuda,mamba2-130m" -- forward
 //! ```
 //!
 //! Raising `BENCH_SEQ` does not extend a run; it buys fewer samples of a longer
 //! iteration, until one iteration alone exceeds a tenth of the budget and the
-//! plan goes `over-budget`. `forward/mamba1` gets there first on a CPU backend:
+//! plan goes `over-budget`. `forward/mamba1-130m` gets there first on a CPU backend:
 //! Mamba-1 has no SSD pathway, so its "parallel" mode is still a sequential
 //! per-token scan — 24 layers × `seq` steps. Filter it out while iterating
 //! (`cargo bench --bench model -- 'mamba[23]'`) or shorten the sequence for it.
@@ -120,7 +121,7 @@
 use burn::prelude::*;
 use burn_mamba::prelude::*;
 use burn_mamba_example::{
-    ModelSpec, PRECISION_FLOAT_D_TYPE, PRECISION_INT_D_TYPE, hf, tie_lm_head, token_pairs,
+    CheckpointSpec, PRECISION_FLOAT_D_TYPE, PRECISION_INT_D_TYPE, hf, tie_lm_head, token_pairs,
 };
 use criterion::measurement::WallTime;
 use criterion::{
@@ -130,18 +131,18 @@ use std::cell::Cell;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-/// Both entry points below need something to measure; `mamba3` on its own
-/// enables the blocks but neither 187m topology, so [`hf::MODELS`] would be
+/// Both entry points below need something to measure; a family feature on its
+/// own enables the blocks but no checkpoint, so [`hf::CHECKPOINTS`] would be
 /// empty and every group would report nothing.
 #[cfg(not(any(
-    feature = "mamba1",
-    feature = "mamba2",
-    feature = "mamba3-siso",
-    feature = "mamba3-mimo"
+    feature = "mamba1-130m",
+    feature = "mamba2-130m",
+    feature = "mamba3-siso-187m",
+    feature = "mamba3-mimo-187m"
 )))]
 compile_error!(
     "the `model` bench needs at least one checkpoint feature: \
-     `mamba1`, `mamba2`, `mamba3-siso` and/or `mamba3-mimo`"
+     `mamba1-130m`, `mamba2-130m`, `mamba3-siso-187m` and/or `mamba3-mimo-187m`"
 );
 
 // ---------------------------------------------------------------------------
@@ -186,7 +187,7 @@ impl Shape {
                 <burn::backend::Dispatch as burn::backend::Backend>::name(device.as_dispatch());
             eprintln!(
                 "bench-config: batch={batch} sequence={sequence} warmup_iters={} \
-                 budget={:.0?} samples={} simd={} backend={backend} models={:?}",
+                 budget={:.0?} samples={} simd={} backend={backend} checkpoints={:?}",
                 warmup_iters(),
                 budget(),
                 samples(),
@@ -465,13 +466,13 @@ fn configure(group: &mut BenchmarkGroup<'_, WallTime>, tokens: u64) {
 }
 
 // ---------------------------------------------------------------------------
-// Model and inputs
+// Network and inputs
 // ---------------------------------------------------------------------------
 
-/// Builds `spec`'s model with random weights, in the shape a loaded checkpoint
+/// Builds `spec`'s network with random weights, in the shape a loaded checkpoint
 /// would have had — see the module header on why the head is tied here.
-fn random_model(spec: &ModelSpec, device: &Device) -> MambaVocabNet {
-    let mut mamba = (spec.config)().init(device);
+fn random_network(spec: &CheckpointSpec, device: &Device) -> MambaVocabNet {
+    let mut mamba = (spec.topology)().init(device);
     tie_lm_head(&mut mamba, device);
     mamba
 }
@@ -479,12 +480,12 @@ fn random_model(spec: &ModelSpec, device: &Device) -> MambaVocabNet {
 /// `count` token ids drawn from `spec`'s vocabulary.
 ///
 /// Deterministic (a plain LCG, not `Tensor::random`) so every backend and every
-/// run feeds the model the same ids — a timing difference between two configs is
+/// run feeds the network the same ids — a timing difference between two configs is
 /// then never a difference in inputs. Ids stay under `vocab_size`, since the
 /// padded tail of the embedding table is never a real token.
-fn token_ids(count: usize, spec: &ModelSpec) -> Vec<usize> {
+fn token_ids(count: usize, spec: &CheckpointSpec) -> Vec<usize> {
     // The checkpoint's *unpadded* vocabulary — the range a real token id lives in.
-    let vocab = (spec.config)().shape.vocab_size as u64;
+    let vocab = (spec.topology)().shape.vocab_size as u64;
     let mut state = 0x2545_F491_4F6C_DD1Du64;
     (0..count)
         .map(|_| {
@@ -497,12 +498,12 @@ fn token_ids(count: usize, spec: &ModelSpec) -> Vec<usize> {
 }
 
 /// Token pairs for a `forward` pass, `[batch, sequence, 2]`.
-fn input_pairs(shape: Shape, spec: &ModelSpec, device: &Device) -> Tensor<3, Int> {
+fn input_pairs(shape: Shape, spec: &CheckpointSpec, device: &Device) -> Tensor<3, Int> {
     token_pairs(&token_ids(shape.batch * shape.sequence, spec), shape.batch, device)
 }
 
 /// Token pairs for one decode step, `[batch, 2]`.
-fn input_pair(shape: Shape, spec: &ModelSpec, device: &Device) -> Tensor<2, Int> {
+fn input_pair(shape: Shape, spec: &CheckpointSpec, device: &Device) -> Tensor<2, Int> {
     token_pairs(&token_ids(shape.batch, spec), shape.batch, device).squeeze_dim(1)
 }
 
@@ -514,10 +515,10 @@ fn input_pair(shape: Shape, spec: &ModelSpec, device: &Device) -> Tensor<2, Int>
 /// path — the call `MambaWrapper::run_parallel` makes once per generated token.
 fn bench_forward(
     c: &mut Criterion,
-    spec: &'static ModelSpec,
+    spec: &'static CheckpointSpec,
     shape: Shape,
     device: &Device,
-    model: &mut Option<MambaVocabNet>,
+    network: &mut Option<MambaVocabNet>,
 ) {
     let plan = Plan::new("forward", spec.id);
     let ssd_path = (spec.ssd_path)();
@@ -530,10 +531,10 @@ fn bench_forward(
         // sample — it re-enters this closure once per sample, and the 187m nets
         // are ~1.1GB of f32 parameters. Lazily, so a case the filter drops costs
         // neither the build nor the warm-up.
-        let mamba = model.get_or_insert_with(|| random_model(spec, device));
+        let mamba = network.get_or_insert_with(|| random_network(spec, device));
         let x = input.get_or_insert_with(|| {
             let x = input_pairs(shape, spec, device);
-            // Untimed: compile (and autotune) the kernels this model needs.
+            // Untimed: compile (and autotune) the kernels this network needs.
             for _ in 0..warmup_iters() {
                 let (_y, _caches) = mamba.forward(x.clone(), None, ssd_path.clone(), None, None);
                 sync(device);
@@ -556,10 +557,10 @@ fn bench_forward(
 /// `MambaWrapper::step` makes per token.
 fn bench_step(
     c: &mut Criterion,
-    spec: &'static ModelSpec,
+    spec: &'static CheckpointSpec,
     shape: Shape,
     device: &Device,
-    model: &mut Option<MambaVocabNet>,
+    network: &mut Option<MambaVocabNet>,
 ) {
     let plan = Plan::new("step", spec.id);
     let mut caches = None;
@@ -568,7 +569,7 @@ fn bench_step(
     // One token per sequence in the batch, not `batch · sequence`.
     configure(&mut group, shape.batch as u64);
     group.bench_function(spec.id, |b| {
-        let mamba = model.get_or_insert_with(|| random_model(spec, device));
+        let mamba = network.get_or_insert_with(|| random_network(spec, device));
         let x = input_pair(shape, spec, device);
 
         if caches.is_none() {
@@ -595,19 +596,19 @@ fn bench_step(
 }
 
 /// Both execution modes, over one set of weights per checkpoint.
-fn bench_model(c: &mut Criterion) {
+fn bench_checkpoints(c: &mut Criterion) {
     let shape = Shape::from_env();
     let device = device();
     shape.announce(&device);
 
-    for spec in hf::MODELS.iter().copied() {
-        // One model at a time: built by whichever group runs first and dropped
+    for spec in hf::CHECKPOINTS.iter().copied() {
+        // One network at a time: built by whichever group runs first and dropped
         // before the next checkpoint's.
-        let mut model = None;
-        bench_forward(c, spec, shape, &device, &mut model);
-        bench_step(c, spec, shape, &device, &mut model);
+        let mut network = None;
+        bench_forward(c, spec, shape, &device, &mut network);
+        bench_step(c, spec, shape, &device, &mut network);
     }
 }
 
-criterion_group!(benches, bench_model);
+criterion_group!(benches, bench_checkpoints);
 criterion_main!(benches);

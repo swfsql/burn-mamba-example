@@ -86,8 +86,8 @@ SKIP="${KERNELS_SKIP:-}"
 DRAIN_MS="${KERNELS_DRAIN_MS:-2000}"
 
 # Every checkpoint this repo knows about, in one binary; the bench iterates
-# `hf::MODELS`, so this is what decides the report's rows.
-MODELS="mamba1,mamba2,mamba3-siso,mamba3-mimo"
+# `hf::CHECKPOINTS`, so this is what decides the report's rows.
+CHECKPOINTS="mamba1-130m,mamba2-130m,mamba3-siso-187m,mamba3-mimo-187m"
 
 mkdir -p "$LOG_DIR"
 
@@ -110,7 +110,7 @@ level = "basic"
 stdout = true
 EOF
 
-# label | cargo features (on top of the models) | BURN_DEVICE | target dir
+# label | cargo features (on top of the checkpoints) | BURN_DEVICE | target dir
 # The `cuda` row's features are `bench.sh`'s shared flex+cuda build, verbatim, so
 # the two scripts hit the same `target/bench-cuda` artifacts.
 CONFIGS=(
@@ -132,7 +132,7 @@ for entry in "${CONFIGS[@]}"; do
         continue
     fi
 
-    echo "==> $label — BURN_DEVICE=$device, RUSTFLAGS='$RUSTFLAGS_PIN', features: $features,$MODELS"
+    echo "==> $label — BURN_DEVICE=$device, RUSTFLAGS='$RUSTFLAGS_PIN', features: $features,$CHECKPOINTS"
 
     # Build, then locate the binary: it has to be run from the scratch dir, and
     # `cargo bench` would run it from the package root instead. With
@@ -141,7 +141,7 @@ for entry in "${CONFIGS[@]}"; do
     # filter writes the rendered text of each diagnostic to stderr.
     if ! bin=$(CARGO_TARGET_DIR="$target" RUSTFLAGS="$RUSTFLAGS_PIN" \
         cargo bench --bench model \
-        --no-default-features --features "$features,$MODELS" \
+        --no-default-features --features "$features,$CHECKPOINTS" \
         --no-run --message-format=json |
         python3 -c 'import json,sys
 for line in sys.stdin:
@@ -187,9 +187,9 @@ CONFIGS = [
     ("cuda-fusion-autotune", "cuda + fusion + autotune"),
 ]
 GROUPS = ["forward", "step"]
-# Rows read best oldest-family-first; `hf::MODELS` (the bench's iteration order)
-# is by descending runtime priority, which is the opposite.
-MODEL_ORDER = ["mamba1", "mamba2", "mamba3-siso", "mamba3-mimo"]
+# Rows read best oldest-family-first; `hf::CHECKPOINTS` (the bench's iteration
+# order) is by descending runtime priority, which is the opposite.
+CHECKPOINT_ORDER = ["mamba1-130m", "mamba2-130m", "mamba3-siso-187m", "mamba3-mimo-187m"]
 GROUP_TITLES = {
     "forward": "`forward` — one chunkwise pass over the whole prompt (`run_parallel`)",
     "step": "`step` — one recurrent decode step (`run_sequential`)",
@@ -288,9 +288,11 @@ for group in GROUPS:
             cases.append(case)
     if not cases:
         continue
-    # Known models first, in family order; anything unrecognised keeps its
+    # Known checkpoints first, in family order; anything unrecognised keeps its
     # encounter order at the end.
-    cases.sort(key=lambda c: MODEL_ORDER.index(c) if c in MODEL_ORDER else len(MODEL_ORDER))
+    cases.sort(
+        key=lambda c: CHECKPOINT_ORDER.index(c) if c in CHECKPOINT_ORDER else len(CHECKPOINT_ORDER)
+    )
     lines += [
         f"## {GROUP_TITLES[group]}",
         "",

@@ -1,13 +1,13 @@
-//! Browser hub client: `fetch` range requests cached chunk-by-chunk in IndexedDB.
+//! Browser hub client: `fetch` range requests, with each download chunk cached
+//! in IndexedDB.
 //!
-//! A 500MB checkpoint is downloaded as [CHUNK_SIZE]-sized ranges so the UI can
-//! show progress, resume after a reload, and evict the file again. The database
-//! name, object-store name and key format match what the `hf-hub` fork wrote, so
-//! a cache filled in by an earlier build of this app is still picked up:
+//! A 500MB checkpoint is fetched as [DOWNLOAD_CHUNK_LEN]-sized ranges so the page
+//! can show progress, resume after a reload, and erase the file again. The hub
+//! cache of the browser has this layout:
 //!
 //! ```text
-//! db "HUGGINGFACE_DB" v2
-//!   store "huggingface/hub/tmp_ref_file_blob"
+//! db "burn-mamba-example" v1
+//!   store "download-chunks"
 //!     key "huggingface/hub/models--EleutherAI--gpt-neox-20b/blobs/<etag>/<start>-<end>"
 //!     value  Uint8Array
 //! ```
@@ -31,16 +31,16 @@ use web_sys::{
 };
 
 /// How much of a file is fetched (and cached) per request.
-pub const CHUNK_SIZE: usize = 10 * 1024 * 1024;
+pub const DOWNLOAD_CHUNK_LEN: usize = 10 * 1024 * 1024;
 
-const DB_NAME: &str = "HUGGINGFACE_DB";
-const DB_VERSION: u32 = 2;
-const CACHE_ROOT: &str = "huggingface/hub";
-const CHUNK_STORE: &str = "huggingface/hub/tmp_ref_file_blob";
+const DB_NAME: &str = "burn-mamba-example";
+const DB_VERSION: u32 = 1;
+const KEY_ROOT: &str = "huggingface/hub";
+const DOWNLOAD_CHUNK_STORE: &str = "download-chunks";
 
 /// One cached range of one blob.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ChunkKey {
+pub struct DownloadChunkKey {
     /// The IndexedDB key.
     pub key: String,
     /// Offset of the first byte, within the whole file.
@@ -49,7 +49,7 @@ pub struct ChunkKey {
     pub end: usize,
 }
 
-impl ChunkKey {
+impl DownloadChunkKey {
     fn new(blob_prefix: &str, start: usize, end: usize, total_size: usize) -> Self {
         let width = total_size.checked_ilog10().unwrap_or(0) as usize + 1;
         Self {
@@ -68,7 +68,7 @@ impl ChunkKey {
         Some(Self { key, start, end })
     }
 
-    /// Number of bytes this chunk holds.
+    /// Number of bytes this download chunk holds.
     pub fn len(&self) -> usize {
         self.end - self.start
     }
@@ -78,8 +78,9 @@ impl ChunkKey {
     }
 }
 
-/// The chunks a file is made of: [Ok] when already cached, [Err] when still to fetch.
-pub type ChunkList = Vec<Result<ChunkKey, ChunkKey>>;
+/// The download chunks a file is made of: [Ok] when already cached, [Err] when
+/// still to fetch.
+pub type DownloadChunkList = Vec<Result<DownloadChunkKey, DownloadChunkKey>>;
 
 /// A hub client holding the open IndexedDB connection.
 #[derive(Clone)]
@@ -87,33 +88,33 @@ pub struct Api {
     endpoint: Endpoint,
     url_template: UrlTemplate,
     db: Rc<IdbDatabase>,
-    chunk_size: usize,
+    download_chunk_len: usize,
 }
 
 impl Api {
-    /// Opens (and, on first use, creates) the cache database.
+    /// Opens (and, on first use, creates) the hub cache database.
     pub async fn new() -> Result<Self, HubError> {
         let mut request = IdbDatabase::open_u32(DB_NAME, DB_VERSION)
-            .map_err(|e| dom_err("opening the cache database", e))?;
+            .map_err(|e| dom_err("opening the hub cache database", e))?;
         request.set_on_upgrade_needed(Some(
             |event: &IdbVersionChangeEvent| -> Result<(), JsValue> {
                 let existing: Vec<String> = event.db().object_store_names().collect();
-                if !existing.iter().any(|name| name == CHUNK_STORE) {
-                    log::info!("creating the IndexedDB object store {CHUNK_STORE}");
-                    event.db().create_object_store(CHUNK_STORE)?;
+                if !existing.iter().any(|name| name == DOWNLOAD_CHUNK_STORE) {
+                    log::info!("creating the IndexedDB object store {DOWNLOAD_CHUNK_STORE}");
+                    event.db().create_object_store(DOWNLOAD_CHUNK_STORE)?;
                 }
                 Ok(())
             },
         ));
         let db = request
             .await
-            .map_err(|e| dom_err("opening the cache database", e))?;
+            .map_err(|e| dom_err("opening the hub cache database", e))?;
 
         Ok(Self {
             endpoint: Endpoint::default(),
             url_template: UrlTemplate::default(),
             db: Rc::new(db),
-            chunk_size: CHUNK_SIZE,
+            download_chunk_len: DOWNLOAD_CHUNK_LEN,
         })
     }
 
@@ -125,8 +126,9 @@ impl Api {
         }
     }
 
-    /// A handle on one model repository at its default revision.
-    pub fn model(&self, repo_id: RepoId) -> ApiRepo {
+    /// A handle on one repository of the hub type "model", at its default
+    /// revision.
+    pub fn model_repo(&self, repo_id: RepoId) -> ApiRepo {
         self.repo(Repo::new(repo_id, RepoType::Model))
     }
 
@@ -134,7 +136,8 @@ impl Api {
     ///
     /// `fetch` transparently follows the hub's redirect to its CDN and only
     /// exposes the final response's headers, so `x-repo-commit` is usually lost
-    /// here — it is not needed, since the browser cache is keyed by etag.
+    /// here — it is not needed, since the hub cache of the browser is keyed by
+    /// etag.
     pub async fn metadata(&self, url: &FileUrl) -> Result<Metadata, HubError> {
         log::info!("requesting metadata for {}", url.0);
         let response = fetch(&url.0, Some((0, 0))).await?;
@@ -163,96 +166,109 @@ impl Api {
         })
     }
 
-    /// Concatenates the cached chunks back into the whole file.
-    pub async fn load_bytes(&self, chunks: &[ChunkKey]) -> Result<Vec<u8>, HubError> {
-        let total = chunks.last().map(|c| c.end).unwrap_or(0);
+    /// Concatenates the cached download chunks back into the whole file.
+    pub async fn load_bytes(
+        &self,
+        download_chunks: &[DownloadChunkKey],
+    ) -> Result<Vec<u8>, HubError> {
+        let total = download_chunks.last().map(|c| c.end).unwrap_or(0);
         let mut bytes = Vec::with_capacity(total);
-        for chunk in chunks {
+        for download_chunk in download_chunks {
             let stored = self
-                .get_chunk(chunk)
+                .get_download_chunk(download_chunk)
                 .await?
-                .ok_or_else(|| HubError::Cache {
-                    context: chunk.key.clone(),
-                    message: "chunk is missing from the cache".into(),
+                .ok_or_else(|| HubError::HubCache {
+                    context: download_chunk.key.clone(),
+                    message: "the download chunk is missing from the hub cache".into(),
                 })?;
             bytes.extend_from_slice(&stored.to_vec());
         }
         Ok(bytes)
     }
 
-    /// Evicts the given chunks from the cache.
-    pub async fn delete_bytes(&self, chunks: &[ChunkKey]) -> Result<(), HubError> {
-        for chunk in chunks {
+    /// Erases the given download chunks from the hub cache.
+    pub async fn delete_bytes(&self, download_chunks: &[DownloadChunkKey]) -> Result<(), HubError> {
+        for download_chunk in download_chunks {
+            let key = &download_chunk.key;
             let tx = self.transaction(IdbTransactionMode::Readwrite)?;
             let store = tx
-                .object_store(CHUNK_STORE)
-                .map_err(|e| dom_err(&chunk.key, e))?;
+                .object_store(DOWNLOAD_CHUNK_STORE)
+                .map_err(|e| dom_err(key, e))?;
             store
-                .delete_owned(chunk.key.as_str())
-                .map_err(|e| dom_err(&chunk.key, e))?
+                .delete_owned(key.as_str())
+                .map_err(|e| dom_err(key, e))?
                 .await
-                .map_err(|e| dom_err(&chunk.key, e))?;
-            tx.await.into_result().map_err(|e| dom_err(&chunk.key, e))?;
+                .map_err(|e| dom_err(key, e))?;
+            tx.await.into_result().map_err(|e| dom_err(key, e))?;
         }
         Ok(())
     }
 
     fn transaction(&self, mode: IdbTransactionMode) -> Result<IdbTransaction<'_>, HubError> {
         self.db
-            .transaction_on_one_with_mode(CHUNK_STORE, mode)
-            .map_err(|e| dom_err(CHUNK_STORE, e))
+            .transaction_on_one_with_mode(DOWNLOAD_CHUNK_STORE, mode)
+            .map_err(|e| dom_err(DOWNLOAD_CHUNK_STORE, e))
     }
 
-    async fn get_chunk(&self, chunk: &ChunkKey) -> Result<Option<Uint8Array>, HubError> {
+    async fn get_download_chunk(
+        &self,
+        download_chunk: &DownloadChunkKey,
+    ) -> Result<Option<Uint8Array>, HubError> {
+        let key = &download_chunk.key;
         let tx = self.transaction(IdbTransactionMode::Readonly)?;
         let store = tx
-            .object_store(CHUNK_STORE)
-            .map_err(|e| dom_err(&chunk.key, e))?;
+            .object_store(DOWNLOAD_CHUNK_STORE)
+            .map_err(|e| dom_err(key, e))?;
         let value = store
-            .get_owned(chunk.key.as_str())
-            .map_err(|e| dom_err(&chunk.key, e))?
+            .get_owned(key.as_str())
+            .map_err(|e| dom_err(key, e))?
             .await
-            .map_err(|e| dom_err(&chunk.key, e))?;
-        tx.await.into_result().map_err(|e| dom_err(&chunk.key, e))?;
+            .map_err(|e| dom_err(key, e))?;
+        tx.await.into_result().map_err(|e| dom_err(key, e))?;
         Ok(value.map(Uint8Array::from))
     }
 
-    async fn put_chunk(&self, chunk: &ChunkKey, data: &Uint8Array) -> Result<(), HubError> {
+    async fn put_download_chunk(
+        &self,
+        download_chunk: &DownloadChunkKey,
+        data: &Uint8Array,
+    ) -> Result<(), HubError> {
+        let key = &download_chunk.key;
         let tx = self.transaction(IdbTransactionMode::Readwrite)?;
         let store = tx
-            .object_store(CHUNK_STORE)
-            .map_err(|e| dom_err(&chunk.key, e))?;
+            .object_store(DOWNLOAD_CHUNK_STORE)
+            .map_err(|e| dom_err(key, e))?;
         store
-            .put_key_val_owned(chunk.key.as_str(), data)
-            .map_err(|e| dom_err(&chunk.key, e))?
+            .put_key_val_owned(key.as_str(), data)
+            .map_err(|e| dom_err(key, e))?
             .await
-            .map_err(|e| dom_err(&chunk.key, e))?;
-        tx.await.into_result().map_err(|e| dom_err(&chunk.key, e))?;
+            .map_err(|e| dom_err(key, e))?;
+        tx.await.into_result().map_err(|e| dom_err(key, e))?;
         Ok(())
     }
 
     /// The keys already cached for one blob, in ascending offset order.
-    async fn cached_chunks(
+    async fn cached_download_chunks(
         &self,
         blob_prefix: &str,
         total_size: usize,
-    ) -> Result<Vec<ChunkKey>, HubError> {
+    ) -> Result<Vec<DownloadChunkKey>, HubError> {
         // Two empty ranges — one at offset 0, one at the end — bracket every real
-        // chunk key of this blob and nothing else.
-        let first = ChunkKey::new(blob_prefix, 0, 0, total_size);
-        let last = ChunkKey::new(blob_prefix, total_size, total_size, total_size);
+        // download chunk key of this blob and nothing else.
+        let first = DownloadChunkKey::new(blob_prefix, 0, 0, total_size);
+        let last = DownloadChunkKey::new(blob_prefix, total_size, total_size, total_size);
         let range = IdbKeyRange::bound(
             &JsValue::from_str(&first.key),
             &JsValue::from_str(&last.key),
         )
-        .map_err(|e| HubError::Cache {
+        .map_err(|e| HubError::HubCache {
             context: blob_prefix.into(),
             message: format!("{e:?}"),
         })?;
 
         let tx = self.transaction(IdbTransactionMode::Readonly)?;
         let store = tx
-            .object_store(CHUNK_STORE)
+            .object_store(DOWNLOAD_CHUNK_STORE)
             .map_err(|e| dom_err(blob_prefix, e))?;
         let cursor = store
             .open_key_cursor_with_range_and_direction_owned(range, IdbCursorDirection::Next)
@@ -272,14 +288,14 @@ impl Api {
 
         Ok(keys
             .into_iter()
-            .filter_map(|key| ChunkKey::parse(key.as_string()?))
+            .filter_map(|key| DownloadChunkKey::parse(key.as_string()?))
             // A zero-length entry would stall the walk in `check`.
-            .filter(|chunk| !chunk.is_empty())
+            .filter(|download_chunk| !download_chunk.is_empty())
             .collect())
     }
 }
 
-/// A repository handle: builds URLs, plans chunks and fetches them.
+/// A repository handle: builds URLs, plans download chunks and fetches them.
 #[derive(Clone)]
 pub struct ApiRepo {
     api: Api,
@@ -297,69 +313,76 @@ impl ApiRepo {
         )
     }
 
-    /// Plans the chunk list for a file: which ranges are cached and which are not.
+    /// Plans the download chunk list for a file: which ranges are cached and
+    /// which are not.
     ///
-    /// Cached chunks are reused only when their start offset is exactly where the
-    /// walk currently is, so a cache written with a different chunk size still
-    /// yields a valid (if partly redundant) plan.
-    pub async fn check(&self, metadata: &Metadata) -> Result<ChunkList, HubError> {
+    /// Cached download chunks are reused only when their start offset is exactly
+    /// where the walk currently is, so a hub cache written with a different
+    /// download chunk length still yields a valid (if partly redundant) plan.
+    pub async fn check(&self, metadata: &Metadata) -> Result<DownloadChunkList, HubError> {
         let blob_prefix = self.blob_prefix(&metadata.etag);
         let size = metadata.size;
-        let cached = self.api.cached_chunks(&blob_prefix, size).await?;
+        let cached = self.api.cached_download_chunks(&blob_prefix, size).await?;
 
-        let mut chunks = ChunkList::new();
+        let mut download_chunks = DownloadChunkList::new();
         let mut cached_iter = cached.into_iter().peekable();
         let mut offset = 0;
         while offset < size {
-            // Drop cached chunks starting before where we are (a leftover from a
-            // previous, differently-sized plan).
+            // Drop cached download chunks starting before where we are (a leftover
+            // from a previous, differently-sized plan).
             while cached_iter.peek().is_some_and(|c| c.start < offset) {
                 cached_iter.next();
             }
             if cached_iter.peek().is_some_and(|c| c.start == offset) {
                 let cached = cached_iter.next().expect("just peeked");
                 offset = cached.end;
-                chunks.push(Ok(cached));
+                download_chunks.push(Ok(cached));
                 continue;
             }
-            // Stop the chunk to fetch right where the next cached one begins; every
-            // remaining cached chunk now starts strictly after `offset`.
+            // Stop the download chunk to fetch right where the next cached one
+            // begins; every remaining cached one now starts strictly after
+            // `offset`.
             let limit = cached_iter.peek().map_or(size, |c| c.start.min(size));
-            let end = (offset + self.api.chunk_size).min(limit);
-            chunks.push(Err(ChunkKey::new(&blob_prefix, offset, end, size)));
+            let end = (offset + self.api.download_chunk_len).min(limit);
+            download_chunks.push(Err(DownloadChunkKey::new(&blob_prefix, offset, end, size)));
             offset = end;
         }
 
-        Ok(chunks)
+        Ok(download_chunks)
     }
 
-    /// Fetches a whole file: plans its chunks, downloads the missing ones and
-    /// concatenates everything. The intermediate progress is not observable, so
-    /// the interactive UI drives [Self::check] / [Self::download_chunk] itself.
+    /// Fetches a whole file: plans its download chunks, fetches the missing ones
+    /// and concatenates everything. The intermediate progress is not observable,
+    /// so the browser page drives [Self::check] / [Self::fetch_download_chunk]
+    /// itself.
     pub async fn get_bytes(&self, filename: &FilePath) -> Result<Vec<u8>, HubError> {
         let url = self.url(filename);
         let metadata = self.api.metadata(&url).await?;
-        let chunks = self.check(&metadata).await?;
+        let download_chunks = self.check(&metadata).await?;
 
-        let mut keys = Vec::with_capacity(chunks.len());
-        for chunk in chunks {
-            let chunk = match chunk {
+        let mut keys = Vec::with_capacity(download_chunks.len());
+        for download_chunk in download_chunks {
+            let download_chunk = match download_chunk {
                 Ok(cached) => cached,
                 Err(missing) => {
-                    self.download_chunk(&url, &missing).await?;
+                    self.fetch_download_chunk(&url, &missing).await?;
                     missing
                 }
             };
-            keys.push(chunk);
+            keys.push(download_chunk);
         }
         self.api.load_bytes(&keys).await
     }
 
-    /// Fetches one planned chunk and stores it.
-    pub async fn download_chunk(&self, url: &FileUrl, chunk: &ChunkKey) -> Result<(), HubError> {
-        log::info!("downloading chunk {}", chunk.key);
+    /// Fetches one planned download chunk and stores it.
+    pub async fn fetch_download_chunk(
+        &self,
+        url: &FileUrl,
+        download_chunk: &DownloadChunkKey,
+    ) -> Result<(), HubError> {
+        log::info!("fetching download chunk {}", download_chunk.key);
         // HTTP ranges are inclusive on both ends.
-        let response = fetch(&url.0, Some((chunk.start, chunk.end - 1))).await?;
+        let response = fetch(&url.0, Some((download_chunk.start, download_chunk.end - 1))).await?;
         let buffer = JsFuture::from(response.array_buffer().map_err(|e| HubError::Request {
             url: url.0.clone(),
             message: format!("{e:?}"),
@@ -371,18 +394,18 @@ impl ApiRepo {
         })?;
         let data = Uint8Array::new(&buffer);
 
-        if data.length() as usize != chunk.len() {
+        if data.length() as usize != download_chunk.len() {
             return Err(HubError::ShortRead {
-                expected: chunk.len(),
+                expected: download_chunk.len(),
                 got: data.length() as usize,
             });
         }
-        self.api.put_chunk(chunk, &data).await
+        self.api.put_download_chunk(download_chunk, &data).await
     }
 
     /// `huggingface/hub/models--…/blobs/<etag>`.
     fn blob_prefix(&self, etag: &BlobHash) -> String {
-        format!("{CACHE_ROOT}/{}/blobs/{}", self.repo.folder_name(), etag.0)
+        format!("{KEY_ROOT}/{}/blobs/{}", self.repo.folder_name(), etag.0)
     }
 }
 
@@ -427,7 +450,7 @@ fn header(headers: &Headers, name: &str) -> Option<String> {
 }
 
 fn dom_err(context: &str, error: DomException) -> HubError {
-    HubError::Cache {
+    HubError::HubCache {
         context: context.into(),
         message: format!("{}: {}", error.name(), error.message()),
     }

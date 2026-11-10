@@ -3,31 +3,31 @@ use crate::Precision;
 use crate::hub::sync::Api;
 use crate::hub::{FilePath, Repo, RepoId, RepoType, RevisionPath};
 use crate::tokenizer::Tokenizer;
-use crate::{Checkpoint, LogitsProcessorWrapper, MambaWrapper, ModelSpec, hf, load_mamba};
+use crate::{CheckpointSpec, LogitsProcessorWrapper, MambaWrapper, WeightsSource, build_network, hf};
 use burn::prelude::*;
 use log::info;
 
 /// Several checkpoints may be compiled in, but the binary runs one; without any
-/// there would be nothing to run. `mamba3` on its own enables the blocks but
-/// neither 187m topology, hence the two sub-features here.
+/// there would be nothing to run. A family feature on its own (`mamba1`,
+/// `mamba2`, `mamba3`) enables the blocks but no checkpoint.
 #[cfg(not(any(
-    feature = "mamba1",
-    feature = "mamba2",
-    feature = "mamba3-siso",
-    feature = "mamba3-mimo"
+    feature = "mamba1-130m",
+    feature = "mamba2-130m",
+    feature = "mamba3-siso-187m",
+    feature = "mamba3-mimo-187m"
 )))]
 compile_error!(
     "the `native` binary needs at least one checkpoint feature: \
-     `mamba1`, `mamba2`, `mamba3-siso` and/or `mamba3-mimo`"
+     `mamba1-130m`, `mamba2-130m`, `mamba3-siso-187m` and/or `mamba3-mimo-187m`"
 );
 
-/// Picks the checkpoint to run out of everything compiled in: `MAMBA_MODEL`
-/// (a [ModelSpec::id]) when set, else the highest-priority one.
-pub fn select_model() -> anyhow::Result<&'static ModelSpec> {
-    match std::env::var("MAMBA_MODEL") {
+/// Picks the checkpoint to run out of everything compiled in: `MAMBA_CHECKPOINT`
+/// (a [CheckpointSpec::id]) when set, else the highest-priority one.
+pub fn select_checkpoint() -> anyhow::Result<&'static CheckpointSpec> {
+    match std::env::var("MAMBA_CHECKPOINT") {
         Ok(id) => hf::by_id(id.trim()).ok_or_else(|| {
             anyhow::anyhow!(
-                "MAMBA_MODEL={id:?} is not compiled into this binary; available: {:?}",
+                "MAMBA_CHECKPOINT={id:?} is not compiled into this binary; available: {:?}",
                 hf::ids()
             )
         }),
@@ -42,23 +42,23 @@ pub fn main() -> anyhow::Result<()> {
         .init();
     info!("init");
 
-    let model = select_model()?;
+    let spec = select_checkpoint()?;
     info!(
-        "running {} (id {:?}); compiled-in models, by priority: {:?}",
-        model.display_name,
-        model.id,
+        "running {} (id {:?}); compiled-in checkpoints, by priority: {:?}",
+        spec.display_name,
+        spec.id,
         hf::ids()
     );
-    let mut models = models(model)?;
+    let mut wrapper = build_wrapper(spec)?;
 
     info!("running in sequential mode (inference-friendly)");
     let sample_len = 80;
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
-    let (sample_len, start) = models.run_sequential("Mamba is the", sample_len, &mut processor)?;
+    let (sample_len, start) = wrapper.run_sequential("Mamba is the", sample_len, &mut processor)?;
     println!();
     let elapsed = start.unwrap().elapsed().as_millis();
     info!(
-        "mamba model generated {sample_len} tokens in {}ms ({} token/s)",
+        "the network generated {sample_len} tokens in {}ms ({} token/s)",
         elapsed,
         (sample_len * 1000) as f32 / elapsed as f32
     );
@@ -66,12 +66,12 @@ pub fn main() -> anyhow::Result<()> {
     info!("running in parallel mode (training-friendly)");
     let sample_len = 20;
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
-    let (sample_len, start) = models.run_parallel("Mamba is the", sample_len, &mut processor)?;
+    let (sample_len, start) = wrapper.run_parallel("Mamba is the", sample_len, &mut processor)?;
     println!();
     let elapsed = start.unwrap().elapsed().as_millis();
     let total_sample_len = (1 + sample_len) * sample_len / 2;
     info!(
-        "mamba model generated {total_sample_len} total tokens in {}ms ({} token/s)",
+        "the network generated {total_sample_len} total tokens in {}ms ({} token/s)",
         elapsed,
         (total_sample_len * 1000) as f32 / elapsed as f32
     );
@@ -80,28 +80,29 @@ pub fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Downloads (or reuses) the tokenizer and the checkpoint, then builds the model.
+/// Fetches (or reuses) the tokenizer and the weights of the checkpoint, then
+/// builds the network.
 ///
 /// Takes the checkpoint to build, so a binary carrying several can build any of
-/// them (see [hf::MODELS]).
-pub fn models(model: &'static ModelSpec) -> anyhow::Result<MambaWrapper> {
+/// them (see [hf::CHECKPOINTS]).
+pub fn build_wrapper(spec: &'static CheckpointSpec) -> anyhow::Result<MambaWrapper> {
     let start = std::time::Instant::now();
 
     let api = Api::new()?;
-    let tokenizer_file = model.file_path_tokenizer_json;
+    let tokenizer_file = spec.file_path_tokenizer_json;
     let tokenizer_filename = api
-        .model(RepoId(model.tokenizer_repo_id.into()))
+        .model_repo(RepoId(spec.tokenizer_repo_id.into()))
         .get(&FilePath(tokenizer_file.into()))?;
     info!("tokenizer {tokenizer_file} path: {tokenizer_filename:?}");
 
     let repo = api.repo(Repo::with_revision(
-        RepoId(model.repo_id.into()),
+        RepoId(spec.repo_id.into()),
         RepoType::Model,
-        RevisionPath(model.revision_path.into()),
+        RevisionPath(spec.revision_path.into()),
     ));
-    let model_file = model.file_path_model_safetensors;
-    let mamba_filename = repo.get(&FilePath(model_file.into()))?;
-    info!("mamba {model_file} path: {mamba_filename:?}");
+    let weights_file = spec.file_path_model_safetensors;
+    let mamba_filename = repo.get(&FilePath(weights_file.into()))?;
+    info!("mamba {weights_file} path: {mamba_filename:?}");
     info!("retrieved the files in {:?}", start.elapsed());
 
     let tokenizer = Tokenizer::from_file(tokenizer_filename)?;
@@ -114,9 +115,9 @@ pub fn models(model: &'static ModelSpec) -> anyhow::Result<MambaWrapper> {
     }
 
     let start = std::time::Instant::now();
-    info!("started loading the model");
-    let mamba = load_mamba(Checkpoint::File(mamba_filename), (model.config)(), &device)?;
-    info!("loaded the model in {:?}", start.elapsed());
+    info!("started the build of the network");
+    let mamba = build_network(WeightsSource::File(mamba_filename), (spec.topology)(), &device)?;
+    info!("built the network in {:?}", start.elapsed());
 
-    Ok(MambaWrapper::new(model, tokenizer, mamba))
+    Ok(MambaWrapper::new(spec, tokenizer, mamba))
 }

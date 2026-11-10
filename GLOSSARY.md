@@ -28,9 +28,14 @@ checkpoint need.
 _Avoid_: config (alone), architecture
 
 **Checkpoint feature**:
-A cargo feature that adds one checkpoint to a build. The `mamba3` feature alone
-adds the blocks of a family, but no checkpoint.
+A cargo feature that adds one checkpoint to a build. Its name is the id of the
+checkpoint, for example `mamba2-130m`. It also adds the family feature of the
+checkpoint.
 _Avoid_: model feature
+
+**Family feature**:
+A cargo feature that adds the blocks of one family to a build, but no
+checkpoint: `mamba1`, `mamba2` or `mamba3`.
 
 **Preferred checkpoint**:
 The checkpoint with the highest priority among the checkpoints that a build
@@ -81,7 +86,7 @@ backend is correct when its text is the text of a reference backend.
 
 **Front-end**:
 One way to run the app: the native binary, the browser console or the browser
-page.
+page. Each front-end has a feature: `native`, `console` or `yew`.
 _Avoid_: target, UI (alone)
 
 ### Downloads

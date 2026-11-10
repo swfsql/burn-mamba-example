@@ -1,23 +1,29 @@
-#[cfg(not(feature = "yew"))]
-pub mod console_ui;
+#[cfg(feature = "console")]
+pub mod console;
 #[cfg(feature = "yew")]
 pub mod yew_ui;
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
 /// Several checkpoints may be compiled in, but a bundle runs one; without any
-/// there would be nothing to run. `mamba3` on its own enables the blocks but
-/// neither 187m topology, hence the two sub-features here.
+/// there would be nothing to run. A family feature on its own (`mamba1`,
+/// `mamba2`, `mamba3`) enables the blocks but no checkpoint.
 #[cfg(not(any(
-    feature = "mamba1",
-    feature = "mamba2",
-    feature = "mamba3-siso",
-    feature = "mamba3-mimo"
+    feature = "mamba1-130m",
+    feature = "mamba2-130m",
+    feature = "mamba3-siso-187m",
+    feature = "mamba3-mimo-187m"
 )))]
 compile_error!(
     "a wasm bundle needs at least one checkpoint feature: \
-     `mamba1`, `mamba2`, `mamba3-siso` and/or `mamba3-mimo`"
+     `mamba1-130m`, `mamba2-130m`, `mamba3-siso-187m` and/or `mamba3-mimo-187m`"
 );
+
+/// A bundle runs one front-end: the browser console or the browser page.
+#[cfg(not(any(feature = "console", feature = "yew")))]
+compile_error!("a wasm bundle needs one front-end feature: `console` or `yew`");
+#[cfg(all(feature = "console", feature = "yew"))]
+compile_error!("a wasm bundle needs exactly one front-end feature, but `console` and `yew` are both on");
 
 #[allow(unused_imports)]
 use crate::Precision;
@@ -30,8 +36,8 @@ pub async fn wasm_main() {
 
     // TODO: configure the backend to the correct precision (crate::Precision).
 
-    #[cfg(not(feature = "yew"))]
-    console_ui::run().await.unwrap();
+    #[cfg(feature = "console")]
+    console::run().await.unwrap();
 
     #[cfg(feature = "yew")]
     {

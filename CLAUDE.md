@@ -9,35 +9,35 @@ A Rust **demo app** that runs a pretrained 130m [Mamba-1](https://huggingface.co
 ([SISO](https://huggingface.co/state-spaces/mamba3-siso-187m) /
 [MIMO](https://huggingface.co/state-spaces/mamba3-mimo-187m)) LM for text generation —
 natively or **in the browser via WASM** (live at
-`swfsql.github.io/burn-mamba-example/{mamba1,mamba2,mamba3-siso,mamba3-mimo}`).
+`swfsql.github.io/burn-mamba-example/{mamba1-130m,mamba2-130m,mamba3-siso-187m,mamba3-mimo-187m}`).
 The model blocks come from the sibling crate [`burn-mamba`](../burn-mamba/CLAUDE.md) on the
 [Burn](https://github.com/tracel-ai/burn/) framework; this repo contributes only the
 **glue**: HF weight download, safetensors → Burn param loading, tokenizer/sampling, and
 the native/console/Yew front-ends.
 
-Unit tests cover `common/tokenizer/`, the compiled-in model list and the mamba3 key
+Unit tests cover `common/tokenizer/`, the compiled-in checkpoint list and the mamba3 key
 remapping; end-to-end correctness is checked by running it and comparing sequential vs
 parallel output (see §Verifying a backend).
 
 ## Features Are The Configuration
 
 `default = []` — the bare crate is just `common/` re-exported as a library. **Every useful
-build is a `--no-default-features --features "…"` combo** of one *target* × one *model* ×
-one *backend*:
+build is a `--no-default-features --features "…"` combo** of one *front-end* × one
+*checkpoint* × one *backend*:
 
 | Axis | Choices |
 |------|---------|
-| target | `native` (bin) · *nothing* (wasm console) · `yew` (wasm UI) |
-| model | `mamba1` \| `mamba2` \| `mamba3-siso` \| `mamba3-mimo` — **any combination** |
+| front-end | `native` (bin) · `console` (wasm console) · `yew` (wasm UI) |
+| checkpoint | `mamba1-130m` \| `mamba2-130m` \| `mamba3-siso-187m` \| `mamba3-mimo-187m` — **any combination** |
 | backend | `backend-{flex,ndarray,cpu,wgpu,vulkan,cuda,tch-cpu,tch-gpu}`, plus `backend-simd` / `backend-fusion` / `backend-autotune` |
 
-Model features **combine**: a binary/wasm build carries every enabled checkpoint as a
-`ModelSpec` in `hf::MODELS` and runs `hf::preferred()` — the highest priority
-(`mamba3-mimo` > `mamba3-siso` > `mamba2` > `mamba1`), which native overrides with
-`MAMBA_MODEL=<id>`. `mamba3-{siso,mimo}` both imply `mamba3` (which enables
-`burn-mamba/mamba3`); `mamba3` alone is library-only — it lists no checkpoint (the two
-differ in `mimo_rank`/`d_intermediate`/`chunk_size`), and the entry points
-`compile_error!` without one.
+Checkpoint features **combine**: a binary/wasm build carries every enabled checkpoint as a
+`CheckpointSpec` in `hf::CHECKPOINTS` and runs `hf::preferred()` — the highest priority
+(`mamba3-mimo-187m` > `mamba3-siso-187m` > `mamba2-130m` > `mamba1-130m`), which native
+overrides with `MAMBA_CHECKPOINT=<id>`. Each checkpoint feature implies its family feature
+`mamba1` / `mamba2` / `mamba3` (which enables `burn-mamba/<family>`); a family feature alone
+is library-only — it lists no checkpoint, and the entry points `compile_error!` without
+one. A wasm build needs exactly one of `console` and `yew`, else a `compile_error!`.
 
 `bacon.toml` holds the eleven canonical check jobs (keys `z x c v b n a s d f g`); `Cargo.toml`'s
 commented `default =` lines and `.cargo/config.toml`'s commented `[build] target` are the
@@ -50,29 +50,29 @@ IDE-development switches.
 ./scripts/check.sh
 
 # native (this exact line is the bacon default job)
-cargo check --no-default-features --features "native,backend-flex,backend-simd,mamba2"
+cargo check --no-default-features --features "native,backend-flex,backend-simd,mamba2-130m"
 RUSTFLAGS="-C target-cpu=native" cargo run --release --no-default-features \
-  --features "native,backend-flex,backend-simd,mamba2"
+  --features "native,backend-flex,backend-simd,mamba2-130m"
 
 # wasm — needs nightly + the wasm32 target
 cargo +nightly check --target wasm32-unknown-unknown --no-default-features \
-  --features "yew,backend-flex,backend-simd,mamba2"
-wasm-pack build --release --target web --out-dir "frontend/mamba2/pkg" --no-opt \
-  --no-default-features --features "yew,backend-flex,backend-simd,mamba2"
-miniserve -i 127.0.0.1 "frontend/"     # then open /mamba2/index.html
+  --features "yew,backend-flex,backend-simd,mamba2-130m"
+wasm-pack build --release --target web --out-dir "frontend/mamba2-130m/pkg" --no-opt \
+  --no-default-features --features "yew,backend-flex,backend-simd,mamba2-130m"
+miniserve -i 127.0.0.1 "frontend/"     # then open /mamba2-130m/index.html
 
-# mamba3 swaps the model feature and the frontend dir; everything else is identical
-cargo check --no-default-features --features "native,backend-flex,backend-simd,mamba3-siso"
+# mamba3 swaps the checkpoint feature and the frontend dir; everything else is identical
+cargo check --no-default-features --features "native,backend-flex,backend-simd,mamba3-siso-187m"
 
-# all models in one binary; runs mamba3-mimo unless MAMBA_MODEL says otherwise
+# all checkpoints in one binary; runs mamba3-mimo-187m unless MAMBA_CHECKPOINT says otherwise
 cargo check --no-default-features \
-  --features "native,backend-flex,backend-simd,mamba1,mamba2,mamba3-siso,mamba3-mimo"
-wasm-pack build --release --target web --out-dir "frontend/mamba3-mimo/pkg" --no-opt \
-  --no-default-features --features "yew,backend-flex,backend-simd,mamba3-mimo"
+  --features "native,backend-flex,backend-simd,mamba1-130m,mamba2-130m,mamba3-siso-187m,mamba3-mimo-187m"
+wasm-pack build --release --target web --out-dir "frontend/mamba3-mimo-187m/pkg" --no-opt \
+  --no-default-features --features "yew,backend-flex,backend-simd,mamba3-mimo-187m"
 
 # tests (a backend is needed: store_load's tests build a module)
 cargo test --no-default-features \
-  --features "backend-flex,backend-simd,mamba1,mamba2,mamba3-siso,mamba3-mimo" \
+  --features "backend-flex,backend-simd,mamba1-130m,mamba2-130m,mamba3-siso-187m,mamba3-mimo-187m" \
    -- --test-threads=1
 
 # the tokenizer's whole-pipeline parity tests need a downloaded tokenizer.json plus a
@@ -82,10 +82,10 @@ TOKENIZER_JSON=… TOKENIZER_IDS=… cargo test --no-default-features -- --ignor
 # store_load's ignored test reads each compiled-in checkpoint's real model.safetensors
 # header from the HF cache, downloading what is missing
 cargo test --no-default-features \
-  --features "backend-flex,backend-simd,mamba1,mamba2,mamba3-siso,mamba3-mimo" \
+  --features "backend-flex,backend-simd,mamba1-130m,mamba2-130m,mamba3-siso-187m,mamba3-mimo-187m" \
   -- --ignored manifests_cover --test-threads=1
 
-cargo bench --bench allocations --no-default-features --features "native,backend-flex,backend-simd,mamba2"
+cargo bench --bench allocations --no-default-features --features "native,backend-flex,backend-simd,mamba2-130m"
 
 # whole-model forward/step timings — four configurations from three builds, writes
 # bench.md; needs no download (real topology, random weights). Optional arg =
@@ -100,10 +100,10 @@ KERNELS_SKIP=cuda-fusion-autotune ./kernels.sh step
 ```
 
 - Running **downloads the weights** from HF on first use (native: `~/.cache`; wasm:
-  IndexedDB): ~493MB mamba1 / ~247MB mamba2, ~357MB for either mamba3-187m, plus a ~17MB
-  `tokenizer.json` for mamba3 against ~2MB for gpt-neox. Native runs are slow; leave them
-  to the user.
-- `--no-opt` is **required** for `yew` builds (`wasm-opt` breaks them). The console-log
+  IndexedDB): ~493MB mamba1-130m / ~247MB mamba2-130m, ~357MB for either mamba3-187m, plus
+  a ~17MB `tokenizer.json` for mamba3 against ~2MB for gpt-neox. Native runs are slow; leave
+  them to the user.
+- `--no-opt` is **required** for `yew` builds (`wasm-opt` breaks them). The `console`
   wasm build may keep `wasm-opt`.
 - `getrandom` needs `--cfg getrandom_backend="wasm_js"`, already set in `.cargo/config.toml`.
 
@@ -113,9 +113,9 @@ KERNELS_SKIP=cuda-fusion-autotune ./kernels.sh step
 src/
 ├─ lib.rs                 crate root: re-exports common; cfg-gates native/ and wasm/
 ├─ common/                backend- and target-agnostic core (the only thing `default` builds)
-│  ├─ mod.rs              Precision/dtype consts; `ModelSpec` (one checkpoint as plain
-│  │                      data: id / display name / repo+file ids / `config` + `ssd_path`
-│  │                      fn pointers) and `hf::{MODELS,preferred,by_id,ids}` — the
+│  ├─ mod.rs              Precision/dtype consts; `CheckpointSpec` (one checkpoint as plain
+│  │                      data: id / display name / repo+file ids / `topology` + `ssd_path`
+│  │                      fn pointers) and `hf::{CHECKPOINTS,preferred,by_id,ids}` — the
 │  │                      priority-ordered list of what this build compiled in;
 │  │                      `hf::{tokenizer,tokenizer_llama31,mamba1_130m,mamba2_130m,
 │  │                      mamba3_{siso,mimo}_187m}` (repo ids + hardcoded
@@ -125,8 +125,8 @@ src/
 │  │                      `spec`; run_sequential / run_parallel / step, `EOS_TOKENS`
 │  │                      probed in order); LogitsProcessorWrapper; device /
 │  │                      padded_vocab_size / empty_caches helpers; tests over the
-│  │                      compiled-in list (priority order, per-checkpoint chunk size)
-│  ├─ store_load.rs       `load_mamba(Checkpoint::{File,Bytes}, config, device)` — the
+│  │                      compiled-in list (priority order, per-checkpoint chunk length)
+│  ├─ store_load.rs       `build_network(WeightsSource::{File,Bytes}, topology, device)` — the
 │  │                      `burn-store` import (key remapping + adapters) + `tie_lm_head`
 │  │                      (public: building a runnable model without a checkpoint needs
 │  │                      it too); tests replay every compiled-in checkpoint's vendored
@@ -152,35 +152,36 @@ src/
 │  │  ├─ mod.rs           `Repo`/`RepoId`/`FilePath`/`UrlTemplate`/`Metadata`/`HubError`
 │  │  ├─ sync.rs          native: `ureq` + the `~/.cache/huggingface/hub` refs/blobs/
 │  │  │                   snapshots layout, so other tools' caches are reused
-│  │  └─ wasm.rs          browser: `fetch` range requests cached as 10MB `ChunkKey`s in
-│  │                      IndexedDB (`hf-hub`'s db/store/key names are kept)
+│  │  └─ wasm.rs          browser: `fetch` range requests cached as 10MB `DownloadChunkKey`s
+│  │                      in IndexedDB (db `burn-mamba-example`, store `download-chunks`)
 │  └─ token_output_stream.rs  streaming detokenizer (adapted from candle-examples)
 ├─ native/
-│  ├─ mod.rs              `select_model()` (`MAMBA_MODEL` else `hf::preferred`) and
-│  │                      `models(spec)`; `main()`: log the pick + everything compiled
+│  ├─ mod.rs              `select_checkpoint()` (`MAMBA_CHECKPOINT` else `hf::preferred`) and
+│  │                      `build_wrapper(spec)`; `main()`: log the pick + everything compiled
 │  │                      in → HF download (hub::sync) → load → sequential run, then
 │  │                      parallel run, both timed
 │  └─ main.rs             thin bin shim (`[[bin]]`, requires `native`)
 └─ wasm/
    ├─ mod.rs              `#[wasm_bindgen] wasm_main()` entry: panic hook, console_log,
-   │                      then console_ui::run() or the Yew renderer; `compile_error!`
-   │                      when no checkpoint feature is on
-   ├─ console_ui.rs       no-UI variant: `hf::preferred` → fetch → load → sequential
+   │                      then console::run() or the Yew renderer; `compile_error!`
+   │                      when no checkpoint feature is on, or not exactly one of
+   │                      `console` / `yew`
+   ├─ console.rs          no-UI variant: `hf::preferred` → fetch → load → sequential
    │                      generate → console.log
    └─ yew_ui/             the interactive page
       ├─ mod.rs           `Msg` enum — the whole app protocol (Start/Finish/Fail triads for
-      │                   connect, cache-check, fetch, load, erase, build; then generation)
+      │                   connect, asset check, fetch, load, erase, build; then generation)
       ├─ model.rs         `active()` = `hf::preferred`; Model state (device, spec,
-      │                   cache_api, per-asset ModelData, builder,
-      │                   Wrapper{models,caches,processor}, tokens/output/step)
+      │                   hub_api, per-asset `Asset`, builder,
+      │                   Wrapper{run_wrapper,caches,processor}, tokens/output/step)
       ├─ update.rs        the reducer; generation is driven one `step()` per 1ms
       │                   `gloo_timers::Interval` tick so the browser keeps painting
       └─ view.rs          Bulma-styled html!: asset cards (fetch/erase/load/unload) + prompt
                           textarea + start/stop/resume/reset controls
 benches/allocations.rs    divan AllocProfiler around `native::main()` (`required-features`
                           = `native`)
-benches/model.rs          criterion `forward`/`step` over every `hf::MODELS` entry: the
-                          checkpoint's own `config()`/`ssd_path()` on random weights, plus
+benches/model.rs          criterion `forward`/`step` over every `hf::CHECKPOINTS` entry: the
+                          checkpoint's own `topology()`/`ssd_path()` on random weights, plus
                           `tie_lm_head`. One model per checkpoint, shared by both groups,
                           built lazily *inside* the bench closure on criterion's first call
                           (skipped when filtered out, not rebuilt per sample); `device()` is
@@ -212,7 +213,8 @@ kernels.sh                per-case GPU kernel-launch counts for the two cuda
                           leaves exactly two cubecl summary tables per case, the second
                           (the lone measured iteration) being the count. Writes kernels.md
 kernels.md                generated kernel-launch report (tracked)
-frontend/{mamba1,mamba2,mamba3-siso,mamba3-mimo}/  index.html + index.js (tracked);
+frontend/{mamba1-130m,mamba2-130m,mamba3-siso-187m,mamba3-mimo-187m}/  index.html +
+                          index.js (tracked);
                           `pkg/` = wasm-pack output (ignored)
 scripts/check.sh          the check of this repo, also run by CI
 docs/box.tsv              the directories next to this repo that the docs name
@@ -224,8 +226,8 @@ docs/box.tsv              the directories next to this repo that the docs name
 
 ### Load path
 
-`hf::<model>::config()` (hardcoded `MambaVocabNetConfig` mirroring the HF `config.json`)
-→ `.init(&device)` → `load_mamba` applies a `burn_store::SafetensorsStore` over it. All of
+`hf::<checkpoint>::topology()` (hardcoded `MambaVocabNetConfig` mirroring the HF `config.json`)
+→ `.init(&device)` → `build_network` applies a `burn_store::SafetensorsStore` over it. All of
 it is declarative, in `store_load.rs`:
 
 - **Key remapping** rewrites `backbone.layers.{i}.mixer.X` →
@@ -269,10 +271,10 @@ and the backend is a runtime `Device`. Every entry point does
 
 ### Browser asset lifecycle (Yew)
 
-Each asset (tokenizer, mamba) is a `ModelData` carrying independent `Cache` (IndexedDB) and
-`Load` (in-memory bytes) state, so the UI can offer fetch / erase / load / unload
-separately. `hub::wasm::ApiRepo::check` turns a `Metadata` into a `ChunkList` — `Ok` per
-cached chunk, `Err` per chunk still to fetch — which is both the fetch plan and the
+Each asset (tokenizer, weights) is an `Asset` carrying independent `HubCacheState` (IndexedDB)
+and `Load` (in-memory bytes) state, so the UI can offer fetch / erase / load / unload
+separately. `hub::wasm::ApiRepo::check` turns a `Metadata` into a `DownloadChunkList` — `Ok`
+per cached download chunk, `Err` per download chunk still to fetch — which is both the fetch plan and the
 progress bar. Loaded bytes are fed to `MambaWrapperBuilder::with`, which drops the raw
 `Vec<u8>` as it builds; the `Wrapper` is only assembled once **both** assets are built.
 
@@ -293,7 +295,7 @@ progress bar. Loaded bytes are fed to `MambaWrapperBuilder::with`, which drops t
   `burn` crates and no types unify.
 - **Configs are hardcoded**, not read from HF `config.json`; the constants in
   `common/mod.rs::hf` must match the checkpoint, and `pad_vocab_size_multiple` differs
-  between models (8 for mamba1, 16 for the rest). Mamba-3's `d_intermediate` is the
+  between models (8 for mamba1-130m, 16 for the rest). Mamba-3's `d_intermediate` is the
   *pre-rounding* figure — `GatedMlpConfig` rounds up to a multiple of 128, so MIMO's
   `1264` realises as `1280`.
 - **Mamba-3 needs `burn-mamba`'s per-layer `GatedMlp`** (`Layer::{norm2,mlp}`,
@@ -302,18 +304,18 @@ progress bar. Loaded bytes are fed to `MambaWrapperBuilder::with`, which drops t
   layer's **total delta** so `Layers`' single outer add reproduces the reference block's
   two residuals.
 - **Model choice is runtime data, not `#[cfg]`.** Entry points hold a
-  `&'static ModelSpec` taken from `hf::MODELS`, so new code touching model choice must go
+  `&'static CheckpointSpec` taken from `hf::CHECKPOINTS`, so new code touching model choice must go
   through it (adding a checkpoint = a `SPEC` + `ssd_path()` in its `hf` module + one
-  `MODELS` entry at its priority) rather than reintroduce a per-feature binding. Only the
+  `CHECKPOINTS` entry at its priority) rather than reintroduce a per-feature binding. Only the
   `MambaVocabNet*`/`MambaVocabNetConfig` matches stay per-feature, with
   `#[allow(irrefutable_let_patterns)]` (the enum has one variant under a single feature —
   so no catch-all arm, which would be unreachable). Anything per-checkpoint that the
-  config alone cannot tell apart — the Mamba-3 `chunk_size` — belongs on the `ModelSpec`.
+  topology alone cannot tell apart — the Mamba-3 `CHUNK_LEN` — belongs on the `CheckpointSpec`.
 - **`frontend/*/pkg/` is generated** by `wasm-pack` and untracked; only `index.html` and
   `index.js` are in git. Don't hand-edit `pkg/`.
 - **CI = deploy.** `.github/workflows/deploy.yml` runs `scripts/check.sh`, then builds all
-  four models' yew bundles on push to `main` and publishes `publish/` to `gh-pages`. Adding
-  a model or renaming a feature means editing that workflow and `scripts/check.sh`.
+  four checkpoints' yew bundles on push to `main` and publishes `publish/` to `gh-pages`. Adding
+  a checkpoint or renaming a feature means editing that workflow and `scripts/check.sh`.
 - **Commits**: when a skill or the user tells you to commit, commit your work to the
   current branch. When the user asks only for a commit message, write it as text for the
   user to copy. A commit message has a title line and a short body, and it ends with the

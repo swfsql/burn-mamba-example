@@ -2,12 +2,10 @@
 //! to depend on.
 //!
 //! Only what the demo needs is implemented: resolve a file's metadata (commit,
-//! etag, size) and get its bytes, with an on-disk cache natively
-//! (`sync`) and a chunked IndexedDB cache in the browser (`wasm`).
+//! etag, size) and get its bytes, with a hub cache on disk natively (`sync`)
+//! and a hub cache of download chunks in IndexedDB in the browser (`wasm`).
 //!
-//! Both back-ends share the naming below, and the browser one keeps `hf-hub`'s
-//! IndexedDB database/store/key layout so caches written by earlier builds of this
-//! app are still recognised.
+//! Both hub clients share the naming below.
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod sync;
@@ -16,15 +14,15 @@ pub mod wasm;
 
 use std::fmt;
 
-/// Everything that can go wrong while talking to the hub or to a cache.
+/// Everything that can go wrong while talking to the hub or to the hub cache.
 #[derive(Debug)]
 pub enum HubError {
     /// The request itself failed (transport, DNS, CORS, non-success status…).
     Request { url: String, message: String },
     /// A response header the hub is expected to send was missing or unusable.
     Header { name: &'static str, url: String },
-    /// The local cache (filesystem or IndexedDB) could not be read or written.
-    Cache { context: String, message: String },
+    /// The hub cache (filesystem or IndexedDB) could not be read or written.
+    HubCache { context: String, message: String },
     /// A range request returned a different number of bytes than asked for.
     ShortRead { expected: usize, got: usize },
 }
@@ -36,7 +34,9 @@ impl fmt::Display for HubError {
             Self::Header { name, url } => {
                 write!(f, "response from {url} is missing a usable {name} header")
             }
-            Self::Cache { context, message } => write!(f, "cache error ({context}): {message}"),
+            Self::HubCache { context, message } => {
+                write!(f, "hub cache error ({context}): {message}")
+            }
             Self::ShortRead { expected, got } => {
                 write!(f, "expected {expected} bytes, received {got}")
             }

@@ -9,10 +9,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-checkpoints="mamba1,mamba2,mamba3-siso,mamba3-mimo"
+checkpoints="mamba1-130m,mamba2-130m,mamba3-siso-187m,mamba3-mimo-187m"
 native_features="native,backend-flex,backend-simd,$checkpoints"
 page_features="yew,backend-flex,backend-simd,$checkpoints"
-console_features="backend-flex,backend-simd,$checkpoints"
+console_features="console,backend-flex,backend-simd,$checkpoints"
 
 # Run a cargo command. Fail when its output holds a warning. A color code can
 # come before the word, for example when `CARGO_TERM_COLOR=always`.

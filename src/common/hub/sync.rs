@@ -1,9 +1,9 @@
 //! Blocking hub client for native builds, caching into the standard
 //! `~/.cache/huggingface/hub` layout so files fetched by (or for) other tools are
-//! reused rather than downloaded again:
+//! reused rather than fetched again:
 //!
 //! ```text
-//! <cache>/models--EleutherAI--gpt-neox-20b/
+//! <hub cache>/models--EleutherAI--gpt-neox-20b/
 //!   refs/main                    -> the commit hash
 //!   blobs/<etag>                 -> the file contents
 //!   snapshots/<commit>/<file>    -> a symlink to the blob
@@ -18,14 +18,14 @@ use std::path::{Path, PathBuf};
 
 const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 /// How much is read from the socket before touching the file / the log.
-const READ_CHUNK: usize = 8 * 1024 * 1024;
+const READ_BUFFER_LEN: usize = 8 * 1024 * 1024;
 
-/// A hub client bound to an endpoint and a local cache directory.
+/// A hub client bound to an endpoint and a hub cache directory.
 #[derive(Clone, Debug)]
 pub struct Api {
     endpoint: Endpoint,
     url_template: UrlTemplate,
-    cache_dir: PathBuf,
+    hub_cache_dir: PathBuf,
     agent: ureq::Agent,
     /// Used for metadata: the `x-repo-commit` / `x-linked-etag` headers only
     /// exist on the hub's own redirect response, not on the CDN's.
@@ -39,7 +39,7 @@ impl Api {
         Ok(Self {
             endpoint: Endpoint::default(),
             url_template: UrlTemplate::default(),
-            cache_dir: default_cache_dir(),
+            hub_cache_dir: default_hub_cache_dir(),
             agent: ureq::AgentBuilder::new().user_agent(USER_AGENT).build(),
             no_redirect_agent: ureq::AgentBuilder::new()
                 .user_agent(USER_AGENT)
@@ -48,9 +48,9 @@ impl Api {
         })
     }
 
-    /// Overrides the cache directory.
-    pub fn with_cache_dir(mut self, cache_dir: PathBuf) -> Self {
-        self.cache_dir = cache_dir;
+    /// Overrides the hub cache directory.
+    pub fn with_hub_cache_dir(mut self, hub_cache_dir: PathBuf) -> Self {
+        self.hub_cache_dir = hub_cache_dir;
         self
     }
 
@@ -62,12 +62,13 @@ impl Api {
         }
     }
 
-    /// A handle on one model repository at its default revision.
-    pub fn model(&self, repo_id: RepoId) -> ApiRepo {
+    /// A handle on one repository of the hub type "model", at its default
+    /// revision.
+    pub fn model_repo(&self, repo_id: RepoId) -> ApiRepo {
         self.repo(Repo::new(repo_id, RepoType::Model))
     }
 
-    /// Resolves a file's commit, etag and size without downloading it.
+    /// Resolves a file's commit, etag and size without a fetch of the file.
     ///
     /// Relative redirects are followed by hand (the hub uses them to move between
     /// its own hosts); the first absolute redirect — to the CDN — is where the
@@ -131,7 +132,7 @@ impl Api {
     }
 }
 
-/// A repository handle: builds URLs and downloads files out of one repo.
+/// A repository handle: builds URLs and fetches files out of one repo.
 #[derive(Clone, Debug)]
 pub struct ApiRepo {
     api: Api,
@@ -149,7 +150,8 @@ impl ApiRepo {
         )
     }
 
-    /// Returns a local path to `filename`, downloading it if the cache misses.
+    /// Returns a local path to `filename`, and fetches it if the hub cache
+    /// misses.
     pub fn get(&self, filename: &FilePath) -> Result<PathBuf, HubError> {
         if let Some(cached) = self.cached_pointer(filename) {
             log::info!("{} is already cached at {cached:?}", filename.0);
@@ -162,21 +164,21 @@ impl ApiRepo {
         let blob = self.blob_path(&metadata.etag);
         if !blob.exists() {
             log::info!(
-                "downloading {} ({:.1} MiB) from {}",
+                "fetching {} ({:.1} MiB) from {}",
                 filename.0,
                 metadata.size as f64 / (1024. * 1024.),
                 url.0
             );
-            self.download_to(&url, &blob, metadata.size)?;
+            self.fetch_to(&url, &blob, metadata.size)?;
         }
 
         self.write_pointer(filename, &metadata.commit_hash, &blob)?;
         Ok(blob)
     }
 
-    /// Streams `url` into `blob`, via a temporary file so an interrupted download
+    /// Streams `url` into `blob`, via a temporary file so an interrupted fetch
     /// never leaves a truncated blob behind.
-    fn download_to(&self, url: &FileUrl, blob: &Path, size: usize) -> Result<(), HubError> {
+    fn fetch_to(&self, url: &FileUrl, blob: &Path, size: usize) -> Result<(), HubError> {
         let response = self
             .api
             .agent
@@ -189,10 +191,10 @@ impl ApiRepo {
 
         create_dir_all(blob.parent().expect("blob paths have a parent"))?;
         let temp = blob.with_extension("incomplete");
-        let mut file = std::fs::File::create(&temp).map_err(|e| cache_err(&temp, e))?;
+        let mut file = std::fs::File::create(&temp).map_err(|e| hub_cache_err(&temp, e))?;
 
         let mut reader = response.into_reader();
-        let mut buffer = vec![0u8; READ_CHUNK];
+        let mut buffer = vec![0u8; READ_BUFFER_LEN];
         let mut written = 0usize;
         let mut next_report = 0usize;
         loop {
@@ -204,14 +206,14 @@ impl ApiRepo {
                 break;
             }
             file.write_all(&buffer[..read])
-                .map_err(|e| cache_err(&temp, e))?;
+                .map_err(|e| hub_cache_err(&temp, e))?;
             written += read;
             if size > 0 && written * 10 / size > next_report {
                 next_report = written * 10 / size;
-                log::info!("downloaded {}%", next_report * 10);
+                log::info!("fetched {}%", next_report * 10);
             }
         }
-        file.flush().map_err(|e| cache_err(&temp, e))?;
+        file.flush().map_err(|e| hub_cache_err(&temp, e))?;
         drop(file);
 
         if size > 0 && written != size {
@@ -222,13 +224,13 @@ impl ApiRepo {
             });
         }
 
-        std::fs::rename(&temp, blob).map_err(|e| cache_err(blob, e))?;
+        std::fs::rename(&temp, blob).map_err(|e| hub_cache_err(blob, e))?;
         Ok(())
     }
 
-    /// `<cache>/<folder_name>`.
+    /// `<hub cache>/<folder_name>`.
     fn repo_dir(&self) -> PathBuf {
-        self.api.cache_dir.join(self.repo.folder_name())
+        self.api.hub_cache_dir.join(self.repo.folder_name())
     }
 
     fn ref_path(&self) -> PathBuf {
@@ -265,7 +267,7 @@ impl ApiRepo {
 
         let ref_path = self.ref_path();
         create_dir_all(ref_path.parent().expect("ref paths have a parent"))?;
-        std::fs::write(&ref_path, commit.0.trim()).map_err(|e| cache_err(&ref_path, e))?;
+        std::fs::write(&ref_path, commit.0.trim()).map_err(|e| hub_cache_err(&ref_path, e))?;
 
         let pointer = self
             .repo_dir()
@@ -281,7 +283,7 @@ impl ApiRepo {
 }
 
 /// `$HF_HOME/hub`, else `~/.cache/huggingface/hub`, else a local `.cache`.
-fn default_cache_dir() -> PathBuf {
+fn default_hub_cache_dir() -> PathBuf {
     if let Ok(hf_home) = std::env::var("HF_HOME") {
         return PathBuf::from(hf_home).join("hub");
     }
@@ -317,15 +319,15 @@ fn symlink_or_copy(blob: &Path, pointer: &Path) -> Result<(), HubError> {
     }
     std::fs::copy(blob, pointer)
         .map(|_| ())
-        .map_err(|e| cache_err(pointer, e))
+        .map_err(|e| hub_cache_err(pointer, e))
 }
 
 fn create_dir_all(path: &Path) -> Result<(), HubError> {
-    std::fs::create_dir_all(path).map_err(|e| cache_err(path, e))
+    std::fs::create_dir_all(path).map_err(|e| hub_cache_err(path, e))
 }
 
-fn cache_err(path: &Path, error: std::io::Error) -> HubError {
-    HubError::Cache {
+fn hub_cache_err(path: &Path, error: std::io::Error) -> HubError {
+    HubError::HubCache {
         context: path.display().to_string(),
         message: error.to_string(),
     }

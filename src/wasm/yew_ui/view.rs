@@ -1,7 +1,7 @@
 use super::Msg;
-use super::model::ModelSelection;
+use super::model::AssetKind;
 pub use super::model::{self, Connection, Model};
-use crate::wasm::yew_ui::model::ModelData;
+use crate::wasm::yew_ui::model::Asset;
 use yew::prelude::*;
 
 impl model::Model {
@@ -18,13 +18,13 @@ impl model::Model {
             <div class="navbar-menu">
                 <div class="navbar-end">
                     <div class="navbar-item">
-                        if self.cache_api.is_exactly_connected() {
+                        if self.hub_api.is_exactly_connected() {
                             <span class="tag is-success is-light">
-                                {"Connected to cache"}
+                                {"Connected to the hub cache"}
                             </span>
-                        } else if self.cache_api.is_exactly_disconnected() {
+                        } else if self.hub_api.is_exactly_disconnected() {
                             <span class="tag is-danger is-light">
-                                {"Disconnected from cache"}
+                                {"Disconnected from the hub cache"}
                             </span>
                         } else {
                             <span class="tag is-loading is-light">
@@ -43,7 +43,7 @@ impl model::Model {
                 class="textarea"
                 name="user-input"
                 rows="4"
-                placeholder="Insert here what the model should start with.."
+                placeholder="Insert here the start of the text.."
                 value={self.input.clone()}
                 oninput={link.callback(|e: InputEvent| Msg::InputUpdate(value_from_event(e)))}
             />
@@ -66,7 +66,7 @@ impl model::Model {
         let controls = html_nested! {
             <div class="tile is-parent">
             <div class="tile is-child">
-                if self.models_wrapper.is_some() {
+                if self.wrapper.is_some() {
                     if self.is_generating {
                         <button
                             class="button"
@@ -99,11 +99,11 @@ impl model::Model {
                         >
                         {"Start Generation"}
                     </button>
-                    <label class="help">{"Models not yet loaded"}</label>
+                    <label class="help">{"Assets not yet loaded"}</label>
                 }
             </div>
             <div class="tile is-child">
-                if self.models_wrapper.is_some() {
+                if self.wrapper.is_some() {
                     if self.is_generating {
                         <button
                             class="button"
@@ -136,19 +136,19 @@ impl model::Model {
                         >
                         {"Reset Caches"}
                     </button>
-                    <label class="help">{"Models not yet loaded"}</label>
+                    <label class="help">{"Assets not yet loaded"}</label>
                 }
             </div>
             </div>
         };
 
-        let tokenizer_model_data = model_data(link, &self.tokenizer, ModelSelection::Tokenizer);
-        let mamba_model_data = model_data(link, &self.mamba, ModelSelection::Mamba);
+        let tokenizer_card = asset_card(link, &self.tokenizer, AssetKind::Tokenizer);
+        let weights_card = asset_card(link, &self.weights, AssetKind::Weights);
 
-        let caches = html_nested! {
+        let assets = html_nested! {
             <div class="tile is-child is-vertical">
-            {tokenizer_model_data}
-            {mamba_model_data}
+            {tokenizer_card}
+            {weights_card}
             </div>
         };
         let section = html_nested! {
@@ -166,9 +166,9 @@ impl model::Model {
                         </div>
                         <div class="tile is-vertical">
                             <div class="tile is-child">
-                            <h2 class="subtitle">{"Model Data"}</h2>
+                            <h2 class="subtitle">{"Assets"}</h2>
                             </div>
-                            {caches}
+                            {assets}
                         </div>
                     </div>
                 </div>
@@ -184,25 +184,25 @@ impl model::Model {
     }
 }
 
-fn model_data<M: yew::Component<Message = Msg>>(
+fn asset_card<M: yew::Component<Message = Msg>>(
     link: &yew::html::Scope<M>,
-    model_data: &ModelData,
-    selection: ModelSelection,
+    asset: &Asset,
+    kind: AssetKind,
 ) -> Html {
-    let label = &model_data.label;
-    let cache = &model_data.cache;
-    let load = &model_data.load;
-    let total_bytes = cache
+    let label = &asset.label;
+    let hub_cache = &asset.hub_cache;
+    let load = &asset.load;
+    let total_bytes = hub_cache
         .fetching
         .metadata
         .as_ref()
         .map(|md| md.size)
         .unwrap_or_default();
     let total_bytes_human = &humansize::format_size(total_bytes, humansize::DECIMAL);
-    let current_chunk = cache.fetching.current_chunk;
-    let total_chunks = cache.fetching.chunk_list.len();
-    let file_url = model_data.config.file_url().0;
-    let file_path = &model_data.config.file_path().0;
+    let current_download_chunk = hub_cache.fetching.current_download_chunk;
+    let total_download_chunks = hub_cache.fetching.download_chunk_list.len();
+    let file_url = asset.config.file_url().0;
+    let file_path = &asset.config.file_path().0;
     let data_load = match (load.is_checking, load.is_done, load.is_busy) {
         (_checking @ true, _, _) => html_nested! {<>
             <button class="button is-outline is-loading" disabled={true}>
@@ -214,16 +214,16 @@ fn model_data<M: yew::Component<Message = Msg>>(
         </>
         },
         (_checking @ false, _loaded @ false, _loading @ false) => {
-            if !cache.is_busy && cache.is_done {
+            if !hub_cache.is_busy && hub_cache.is_done {
                 html_nested! {<>
                     <button
                         class="button is-danger"
-                        onclick={link.callback(move |_| Msg::StartModelDataLoad(selection))}
+                        onclick={link.callback(move |_| Msg::StartAssetLoad(kind))}
                     >
                         {"Not loaded"}
                     </button>
                     <label class="help">
-                        {"Click to load from cache"}
+                        {"Click to load from the hub cache"}
                     </label>
                 </>
                 }
@@ -251,7 +251,7 @@ fn model_data<M: yew::Component<Message = Msg>>(
         (false, _loaded @ true, false) => html_nested! {<>
             <button
                 class="button is-success is-light"
-                onclick={link.callback(move |_| Msg::ModelDataUnload(selection))}
+                onclick={link.callback(move |_| Msg::AssetUnload(kind))}
             >
                 {format!("Loaded ({total_bytes_human})..")}
             </button>
@@ -272,7 +272,7 @@ fn model_data<M: yew::Component<Message = Msg>>(
         },
     };
 
-    let data_cache = match (cache.is_checking, cache.is_done, cache.is_busy) {
+    let data_hub_cache = match (hub_cache.is_checking, hub_cache.is_done, hub_cache.is_busy) {
         (_checking @ true, _, _) => html_nested! {<>
             <button class="button is-outline is-loading" disabled={true}>
                 {"Checking"}
@@ -285,7 +285,7 @@ fn model_data<M: yew::Component<Message = Msg>>(
         (_checking @ false, _cached @ false, _fetching @ false) => html_nested! {<>
             <button
                 class="button"
-                onclick={link.callback(move |_| Msg::StartModelDataFetch(selection))}
+                onclick={link.callback(move |_| Msg::StartAssetFetch(kind))}
             >
                 {"Not cached"}
             </button>
@@ -299,19 +299,19 @@ fn model_data<M: yew::Component<Message = Msg>>(
                 {"Fetching"}
             </button>
             <label class="help">
-                {format!("Fetching {total_bytes_human} ({current_chunk}/{total_chunks})")}
+                {format!("Fetching {total_bytes_human} ({current_download_chunk}/{total_download_chunks})")}
             </label>
         </>
         },
         (false, _cached @ true, false) => html_nested! {<>
             <button
                 class="button is-success is-light"
-                onclick={link.callback(move |_| Msg::StartModelDataErase(selection))}
+                onclick={link.callback(move |_| Msg::StartAssetErase(kind))}
             >
                 {format!("Cached ({total_bytes_human})")}
             </button>
             <label class="help">
-                {"Click to erase from cache"}
+                {"Click to erase from the hub cache"}
             </label>
         </>
         },
@@ -337,7 +337,7 @@ fn model_data<M: yew::Component<Message = Msg>>(
                 {data_load}
             </div>
             <div class="tile is-child">
-                {data_cache}
+                {data_hub_cache}
             </div>
             <div class="tile is-child">
                 <a
@@ -356,7 +356,7 @@ fn model_data<M: yew::Component<Message = Msg>>(
                 <button
                     class="button"
                     disabled={true}
-                    onclick={link.callback(move |_| Msg::StartModelDataUpload(selection))}
+                    onclick={link.callback(move |_| Msg::StartAssetUpload(kind))}
                 >
                     {"Load from file"}
                 </button>

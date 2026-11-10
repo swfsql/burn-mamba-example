@@ -3,9 +3,10 @@
 # bench.sh — run the whole-model benchmarks (benches/model.rs) in every backend
 # configuration and collect the results into a comparison report (bench.md).
 #
-# Every build carries all four checkpoints (mamba1, mamba2, mamba3-siso,
-# mamba3-mimo), so each run measures every model; the models themselves are
-# built with random weights, so nothing is downloaded.
+# Every build carries all four checkpoints (mamba1-130m, mamba2-130m,
+# mamba3-siso-187m, mamba3-mimo-187m), so each run measures every checkpoint;
+# the networks themselves are built with random weights, so nothing is
+# downloaded.
 #
 # Configurations
 # --------------
@@ -65,7 +66,7 @@
 # samples). The dfdx sibling's bench.sh is capped the same way, on purpose.
 #
 # A skipped configuration is carried over from its previous log only when that log
-# is still about the same thing: same shape, budget and models, and the same set of
+# is still about the same thing: same shape, budget and checkpoints, and the same set of
 # cases this invocation measured. Otherwise the column is left out, since silently
 # mixing runs taken at another filter or size would be worse. The report names each
 # column's measurement date, so a carried-over one is visible as such.
@@ -79,8 +80,8 @@ FILTER="${1:-}"
 SKIP="${BENCH_SKIP:-}"
 
 # Every checkpoint this repo knows about, in one binary; the bench iterates
-# `hf::MODELS`, so this is what decides the report's rows.
-MODELS="mamba1,mamba2,mamba3-siso,mamba3-mimo"
+# `hf::CHECKPOINTS`, so this is what decides the report's rows.
+CHECKPOINTS="mamba1-130m,mamba2-130m,mamba3-siso-187m,mamba3-mimo-187m"
 
 mkdir -p "$LOG_DIR"
 
@@ -92,7 +93,7 @@ case "$(uname -m)" in
 esac
 BASELINE_CPU="${BENCH_BASELINE_CPU:-$DEFAULT_BASELINE_CPU}"
 
-# label | cargo features (on top of the models) | BURN_DEVICE | target dir | RUSTFLAGS
+# label | cargo features (on top of the checkpoints) | BURN_DEVICE | target dir | RUSTFLAGS
 # The `flex` and `cuda` rows are the same build (same features, flags and target
 # dir), so it compiles once and is then run on two devices. `backend-simd` rides
 # along for flex's sake; it is a CPU-backend feature and does not touch the CUDA
@@ -121,10 +122,10 @@ for entry in "${CONFIGS[@]}"; do
         continue
     fi
 
-    echo "==> $label — BURN_DEVICE=$device, RUSTFLAGS='$rustflags', features: $features,$MODELS"
+    echo "==> $label — BURN_DEVICE=$device, RUSTFLAGS='$rustflags', features: $features,$CHECKPOINTS"
     CARGO_TARGET_DIR="$target" BURN_DEVICE="$device" RUSTFLAGS="$rustflags" \
         cargo bench --bench model \
-        --no-default-features --features "$features,$MODELS" -- \
+        --no-default-features --features "$features,$CHECKPOINTS" -- \
         --save-baseline "$label" ${FILTER:+"$FILTER"} \
         2>&1 | tee "$LOG_DIR/$label.log"
 
@@ -148,9 +149,9 @@ CONFIGS = [
     ("cuda-fusion-autotune", "cuda + fusion + autotune"),
 ]
 GROUPS = ["forward", "step"]
-# Rows read best oldest-family-first; `hf::MODELS` (the bench's iteration order)
-# is by descending runtime priority, which is the opposite.
-MODEL_ORDER = ["mamba1", "mamba2", "mamba3-siso", "mamba3-mimo"]
+# Rows read best oldest-family-first; `hf::CHECKPOINTS` (the bench's iteration
+# order) is by descending runtime priority, which is the opposite.
+CHECKPOINT_ORDER = ["mamba1-130m", "mamba2-130m", "mamba3-siso-187m", "mamba3-mimo-187m"]
 GROUP_TITLES = {
     "forward": "`forward` — one chunkwise pass over the whole prompt (`run_parallel`)",
     "step": "`step` — one recurrent decode step (`run_sequential`)",
@@ -178,7 +179,7 @@ def fmt(ms):
 # What has to agree before a configuration this invocation did *not* run may be
 # carried over from its old log: everything about the workload. `backend` and `simd`
 # are per column by design, and the case set is compared separately.
-WORKLOAD = ("batch", "sequence", "warmup_iters", "budget", "samples", "models")
+WORKLOAD = ("batch", "sequence", "warmup_iters", "budget", "samples", "checkpoints")
 FIELD = re.compile(r"(\w+)=(\[[^\]]*\]|\S+)")
 
 
@@ -282,9 +283,11 @@ for group in GROUPS:
             cases.append(case)
     if not cases:
         continue
-    # Known models first, in family order; anything unrecognised keeps its
+    # Known checkpoints first, in family order; anything unrecognised keeps its
     # encounter order at the end.
-    cases.sort(key=lambda c: MODEL_ORDER.index(c) if c in MODEL_ORDER else len(MODEL_ORDER))
+    cases.sort(
+        key=lambda c: CHECKPOINT_ORDER.index(c) if c in CHECKPOINT_ORDER else len(CHECKPOINT_ORDER)
+    )
     lines += [
         f"## {GROUP_TITLES[group]}",
         "",

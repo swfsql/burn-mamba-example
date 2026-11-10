@@ -6,28 +6,33 @@ edition = "2024"
 [features]
 ## defaults
 default = [] # by default just re-exports common/ as a library
-# default = ["native", "backend-flex", "mamba2"] # for native dev
-# default = ["native", "backend-wgpu", "mamba2"] # for native wgpu
-# default = ["native", "backend-cuda", "mamba2"] # for native cuda
-# default = ["native", "backend-tch-gpu", "mamba2"] # for native torch
-# default = ["backend-flex", "mamba2"] # for wasm web-console dev - also check .cargo/config.toml
-# default = ["backend-flex", "yew", "mamba2"] # for wasm + web-yew dev - also check .cargo/config.toml
+# default = ["native", "backend-flex", "mamba2-130m"] # for native dev
+# default = ["native", "backend-wgpu", "mamba2-130m"] # for native wgpu
+# default = ["native", "backend-cuda", "mamba2-130m"] # for native cuda
+# default = ["native", "backend-tch-gpu", "mamba2-130m"] # for native torch
+# default = ["console", "backend-flex", "mamba2-130m"] # for wasm web-console dev - also check .cargo/config.toml
+# default = ["yew", "backend-flex", "mamba2-130m"] # for wasm + web-yew dev - also check .cargo/config.toml
 #
-## mamba version - any combination may be enabled; a binary/wasm build carries
-## every enabled checkpoint and runs the highest-priority one
-## (mamba3-mimo > mamba3-siso > mamba2 > mamba1), overridable natively with
-## `MAMBA_MODEL=<id>`
+## family features: each adds the blocks of one family, and no checkpoint
 mamba1 = ["burn-mamba/mamba1"]
 mamba2 = ["burn-mamba/mamba2"]
-## mamba3 only enables the blocks; the two official 187m checkpoints differ in
-## `mimo_rank`/`d_intermediate`/`chunk_size`, so a runnable build needs
-## `mamba3-siso` and/or `mamba3-mimo`
 mamba3 = ["burn-mamba/mamba3"]
-mamba3-siso = ["mamba3"]
-mamba3-mimo = ["mamba3"]
 #
-## binary from src/native/main.rs
+## checkpoint features: each adds one checkpoint, and its family feature. Any
+## combination may be enabled. A build holds each enabled checkpoint and runs
+## the highest-priority one
+## (mamba3-mimo-187m > mamba3-siso-187m > mamba2-130m > mamba1-130m). Natively,
+## `MAMBA_CHECKPOINT=<id>` selects another one.
+mamba1-130m = ["mamba1"]
+mamba2-130m = ["mamba2"]
+mamba3-siso-187m = ["mamba3"]
+mamba3-mimo-187m = ["mamba3"]
+#
+## front-end features. A wasm build needs exactly one of `console` and `yew`.
+## the native binary, from src/native/main.rs
 native = ["dep:pretty_env_logger"]
+## the browser console: no page, the output goes to the console log
+console = []
 #
 ## burn backend - check README for more info
 backend-ndarray = ["burn/ndarray", "burn-mamba/backend-ndarray"]
@@ -44,7 +49,7 @@ backend-cuda = ["burn/cuda", "burn-mamba/backend-cuda"]
 backend-fusion = ["burn/fusion", "burn-mamba/fusion"]
 backend-autotune = ["burn/autotune"]
 #
-## wasm yew UI
+## the browser page, built with Yew
 yew = ["dep:yew", "dep:gloo-timers", "dep:humansize"]
 
 [lib]

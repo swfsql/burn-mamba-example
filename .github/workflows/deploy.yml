@@ -51,32 +51,32 @@ jobs:
             - name: Download wasm-pack
               run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
-            - name: Build Release wasm for Mamba1
-              run: wasm-pack build --release --target web --out-dir "frontend/mamba1/pkg" --no-opt --no-default-features --features "backend-flex,backend-simd,yew,mamba1"
+            - name: Build Release wasm for mamba1-130m
+              run: wasm-pack build --release --target web --out-dir "frontend/mamba1-130m/pkg" --no-opt --no-default-features --features "backend-flex,backend-simd,yew,mamba1-130m"
 
-            - name: Build Release wasm for Mamba2
-              run: wasm-pack build --release --target web --out-dir "frontend/mamba2/pkg" --no-opt --no-default-features --features "backend-flex,backend-simd,yew,mamba2"
+            - name: Build Release wasm for mamba2-130m
+              run: wasm-pack build --release --target web --out-dir "frontend/mamba2-130m/pkg" --no-opt --no-default-features --features "backend-flex,backend-simd,yew,mamba2-130m"
 
-            - name: Build Release wasm for Mamba3 SISO
-              run: wasm-pack build --release --target web --out-dir "frontend/mamba3-siso/pkg" --no-opt --no-default-features --features "backend-flex,backend-simd,yew,mamba3-siso"
+            - name: Build Release wasm for mamba3-siso-187m
+              run: wasm-pack build --release --target web --out-dir "frontend/mamba3-siso-187m/pkg" --no-opt --no-default-features --features "backend-flex,backend-simd,yew,mamba3-siso-187m"
 
-            - name: Build Release wasm for Mamba3 MIMO
-              run: wasm-pack build --release --target web --out-dir "frontend/mamba3-mimo/pkg" --no-opt --no-default-features --features "backend-flex,backend-simd,yew,mamba3-mimo"
+            - name: Build Release wasm for mamba3-mimo-187m
+              run: wasm-pack build --release --target web --out-dir "frontend/mamba3-mimo-187m/pkg" --no-opt --no-default-features --features "backend-flex,backend-simd,yew,mamba3-mimo-187m"
 
             - name: Prepare Wasm Deploy
               run: |
                   set -e
-                  for model in mamba1 mamba2 mamba3-siso mamba3-mimo; do
+                  for checkpoint in mamba1-130m mamba2-130m mamba3-siso-187m mamba3-mimo-187m; do
                       # Prepare the publishing structure
-                      mkdir -p "publish/$model"
+                      mkdir -p "publish/$checkpoint"
 
-                      # move assets
-                      mv "frontend/$model/index.html" "publish/$model/"
-                      mv "frontend/$model/index.js" "publish/$model/"
-                      mv "frontend/$model/pkg/" "publish/$model/pkg/"
+                      # move the page files and the bundle
+                      mv "frontend/$checkpoint/index.html" "publish/$checkpoint/"
+                      mv "frontend/$checkpoint/index.js" "publish/$checkpoint/"
+                      mv "frontend/$checkpoint/pkg/" "publish/$checkpoint/pkg/"
 
                       # rm gitignore
-                      rm "publish/$model/pkg/.gitignore"
+                      rm "publish/$checkpoint/pkg/.gitignore"
                   done
 
             # Publish

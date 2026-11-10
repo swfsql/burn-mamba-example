@@ -1,5 +1,5 @@
 // example command:
-// cargo bench --bench allocations --no-default-features --features "native,flex,simd,mamba2"
+// cargo bench --bench allocations --no-default-features --features "native,backend-flex,backend-simd,mamba2-130m"
 // note: the info logs are still displayed
 
 use burn_mamba_example::native;
