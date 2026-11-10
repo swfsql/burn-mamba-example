@@ -1,6 +1,6 @@
 # 03: `cargo update` at the new pins
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02
 Spec: `.scratch/bump-burn-mamba-main/spec.md`
 
@@ -57,5 +57,9 @@ text, and the text still matches the README samples.
   `76b3878` is the same as at `125d24c`. For each of the four checkpoints, run
   agreement holds, and the sequential text starts with its README sample (see
   the `## Comments` of ticket 02).
-- **`bench.md` and `kernels.md`:** not regenerated. The maintainer regenerates
-  them, with a pinned `powersave` CPU governor.
+- **`bench.md` and `kernels.md`:** not regenerated. The bench binary of the
+  cuda configurations does not link, so `bench.sh` stops and `kernels.sh`
+  writes no report. Ticket 05 covers this defect. The maintainer regenerates
+  the reports after ticket 05, with a pinned `powersave` CPU governor.
+- **Resolved:** by the maintainer, with the criterion of `bench.md` and
+  `kernels.md` open. Ticket 05 closes it.

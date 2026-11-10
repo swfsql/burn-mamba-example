@@ -1,6 +1,6 @@
 # 02: Bump burn-mamba to its main and burn to 0.22.1
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 01
 Spec: `.scratch/bump-burn-mamba-main/spec.md`
 
@@ -170,5 +170,8 @@ spec gives each decision in full (Implementation Decisions).
     README sample.
   - So the bump changes no text, and the new `dt_limit` of Mamba-2 and Mamba-3
     changes no value of these runs.
-- **`bench.md` and `kernels.md`:** not regenerated. The maintainer regenerates
-  them.
+- **`bench.md` and `kernels.md`:** not regenerated. The bench binary of the
+  cuda configurations does not link, so `bench.sh` stops and `kernels.sh`
+  writes no report. Ticket 05 covers this defect.
+- **Resolved:** by the maintainer, with the criterion of `bench.md` and
+  `kernels.md` open. Ticket 05 closes it.
