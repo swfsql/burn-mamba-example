@@ -29,5 +29,6 @@ section (Implementation Decisions, ticket 03).
 
 - Ticket 01 added the access allowlist to the Custom Commands of `CLAUDE.md`.
   Keep its rule on burn-mamba and burn-stack. They have other users, so they
-  stay read-only. A change to them starts as a ticket in their own tracker.
+  stay read-only, except their `.scratch/`. A change to them starts as a ticket
+  in their own tracker.
   Do not copy the read and write roots of `../burn-mamba/CLAUDE.md` for them.

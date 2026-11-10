@@ -77,18 +77,24 @@ each decision in full (Implementation Decisions, ticket 01).
   `done: created 6, present 0, warnings 0.`
 - **The decisions of the maintainer, after the review:**
   - The prose ratchet also reads `.scratch/`, as the Testing Decisions of the
-    spec say. `../burn-mamba/scripts/check.sh` skips it. A ticket in the tracker
-    of burn-mamba and a ticket in the tracker of burn-stack ask for the same
-    change. The spec failed the wider ratchet with two hard violations. Each was
+    spec say. `../burn-mamba/scripts/check.sh` skips it. Two tickets ask for the
+    same change:
+    `../burn-mamba/.scratch/check-script-followups/issues/01-prose-ratchet-reads-scratch.md`
+    and `../burn-stack/.scratch/check-script-followups/issues/01-prose-ratchet.md`.
+    The spec failed the wider ratchet with two hard violations. Each was
     a name next to a synonym (`Erase` and `delete`, `Verifying` and `check`).
     The names are now code spans.
   - The hook gets the root `$CARGO_HOME/bin`, as in the burn-mamba copy. The
     auto mode of the agent refused that edit of its own hook, so the maintainer
-    makes it.
+    made it.
+  - The color codes of the warning grep: a ticket of burn-mamba,
+    `../burn-mamba/.scratch/check-script-followups/issues/02-warning-grep-and-color-codes.md`.
+  - The maintainer approved writes to `../burn-mamba/.scratch/` and
+    `../burn-stack/.scratch/`, for the tickets of this repo.
   - `.claude/settings.local.json` lost the three `permissions.allow` entries
     that the hook does not permit. The first is the `Read` rule for the parent
     directory of this repo. The second is `Read` of `~/.cargo/registry`, because
     the cargo home of this box is elsewhere. The third is `Bash(find / …)`.
   - `CLAUDE.md` now has the access allowlist. burn-mamba and burn-stack have
-    other users, so they stay read-only. A change to them starts as a ticket in
-    their own tracker.
+    other users, so they stay read-only, except their `.scratch/`. A change to
+    them starts as a ticket in their own tracker.

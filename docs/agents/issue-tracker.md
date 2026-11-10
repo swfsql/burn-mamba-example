@@ -22,7 +22,7 @@ Read the file at the given path. The user usually gives the path or the issue nu
 
 This tracker holds only the work of this repo. `../burn-mamba` and `../burn-stack` stay read-only from a session of this repo, because they have other users.
 
-- **The burn-mamba part**: a ticket in the burn-mamba tracker (`../burn-mamba/docs/agents/issue-tracker.md`). A session of this repo can write that ticket after the user approves its path. A burn-mamba session does the change. A change to `../burn-stack` follows the same steps, with the burn-stack tracker.
+- **The burn-mamba part**: a ticket in the burn-mamba tracker (`../burn-mamba/docs/agents/issue-tracker.md`). A session of this repo can write that ticket: the access allowlist of `CLAUDE.md` permits writes to the `.scratch/` of burn-mamba and burn-stack. A burn-mamba session does the change. A change to `../burn-stack` follows the same steps, with the burn-stack tracker.
 - **Blocking**: the `Blocked by:` line of a ticket here gives the path of the burn-mamba ticket.
 - **Review**: `/code-review` here reads only the diff of this repo.
 

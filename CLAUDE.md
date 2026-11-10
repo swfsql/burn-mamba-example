@@ -353,10 +353,13 @@ builds:
 - **Access is an allowlist. It holds for every agent and every command,
   read-only commands included.**
   - Read and write: this repo and the auto-memory.
-  - Read: `../{burn-mamba,burn-stack,burn,cubecl,cubek}/`,
-    `../{hf-hub,candle,tokenizers}/`, `../papers/`, `../py/`, the cargo registry
-    and git checkouts, the rustup toolchains, `~/.claude/` and the hub cache of
-    the native binary (`~/.cache/huggingface/hub`).
+  - Read, next to this repo: `../{burn-mamba,burn-stack,burn,cubecl,cubek}/`,
+    `../{hf-hub,candle,tokenizers}/`, `../papers/` and `../py/`.
+  - Read, on this box: the cargo registry, git checkouts and installed tools,
+    the rustup toolchains, `~/.claude/` and the hub cache of the native binary
+    (`~/.cache/huggingface/hub`).
+  - Write a ticket in the tracker of a sibling: `../burn-mamba/.scratch/` and
+    `../burn-stack/.scratch/`. The user approved these two paths.
   - `/tmp`: read tool output, and write throwaway files with Bash.
   - Any other path: a local hook refuses it. Ask the user, name the exact path,
     and give the command that approves it, which only the user runs:
@@ -366,8 +369,8 @@ builds:
     the parent directory.
 - **`../burn-mamba/` and `../burn-stack/` have other users.** A change to one of
   them starts as a ticket in its own tracker (its `docs/agents/issue-tracker.md`).
-  A session of this repo can write that ticket after the user approves its path.
-  A session of that repo does the change, under the rules of that repo.
+  A session of this repo can write that ticket. A session of that repo does the
+  change, under the rules of that repo.
 - `rg`: available.
 - `cargo fmt`: don't use.
 - **Always** edit files with the Edit/Write tools — including when a harness or
