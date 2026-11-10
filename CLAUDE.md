@@ -323,13 +323,9 @@ progress bar. Loaded bytes are fed to `MambaWrapperBuilder::with`, which drops t
   changelog-style prose on sight.
 - `README.md` is the user-facing doc (build recipes, backend correctness table, sample
   outputs); keep the two in sync rather than duplicating detail here.
-- When a source file is added/removed/changed, prepare an update to its
-  [File Map](#file-map) entry (per the rules above). Important rule: this is **reserved to
-  the end of your workload**, and if by then you haven't yet read this file / `README.md`,
-  **do not** read them — your context is big from the work and re-reading is expensive.
-  Instead write a `tmp.md` holding what the new entry would be, plus a succint overview of
-  the most important aspects of the created/removed/updated files. After a full context
-  reset, manually triggered by the user, we actually update those files.
+- Docs follow the **Docs** rules of `../burn-mamba/CLAUDE.md`: the `asd-ste100` style, a
+  new term to `GLOSSARY.md`, a trade-off to an ADR, a mechanism to its module header, and a
+  name and its docs in the same change. Write no `tmp.md` and no `files.md`.
 
 ## Extra References
 
