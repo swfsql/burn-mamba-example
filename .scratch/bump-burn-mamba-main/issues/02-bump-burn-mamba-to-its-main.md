@@ -79,7 +79,7 @@ spec gives each decision in full (Implementation Decisions).
   features passes.
 - [x] `cargo test` with `flex`, `simd` and the four checkpoint features passes,
   with one test thread.
-- [ ] Seam 3: the user ran the native app on `flex` for each of the four
+- [x] Seam 3: the user ran the native app on `flex` for each of the four
   checkpoints. For each checkpoint, run agreement holds, and the text of the
   sequential run starts with its README sample. The `## Comments` of this ticket
   record the result of each run.
@@ -157,6 +157,18 @@ spec gives each decision in full (Implementation Decisions).
 - **Stale in `CLAUDE.md` (for the overhaul session):** `mamba_block` in the key
   remapping, "Deps are git-rev-pinned", the rule on the per-feature
   `MambaVocabNet*` matches, and the arguments of `empty_caches`.
-- **Native runs (seam 3):** not done. The maintainer runs them.
+- **Native runs (seam 3):** the maintainer ran the native app at `125d24c` on
+  `flex`, with the four checkpoint features in one build and
+  `RUSTFLAGS="-C target-cpu=native"`, once for each `MAMBA_MODEL`:
+  - `mamba1`: run agreement holds. The sequential text starts with its README
+    sample.
+  - `mamba2`: run agreement holds. The sequential text starts with its README
+    sample.
+  - `mamba3-siso`: run agreement holds. The sequential text starts with its
+    README sample.
+  - `mamba3-mimo`: run agreement holds. The sequential text starts with its
+    README sample.
+  - So the bump changes no text, and the new `dt_limit` of Mamba-2 and Mamba-3
+    changes no value of these runs.
 - **`bench.md` and `kernels.md`:** not regenerated. The maintainer regenerates
   them.
