@@ -106,6 +106,11 @@ To copy a file from the hub into the hub cache. The browser page fetches one
 download chunk at a time.
 _Avoid_: download (the browser page uses it for a save to disk)
 
+**Plan**:
+The download chunks of one file, in order, each marked as in the hub cache or
+not. A fetch copies only the download chunks that the hub cache does not hold.
+_Avoid_: download chunk list
+
 ### The browser page
 
 **Asset**:
