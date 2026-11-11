@@ -13,10 +13,10 @@ browser — no inference server, no API key.
 
 | Model | Params | Weights | Tokenizer | Try it |
 |---|---|---|---|---|
-| Mamba-1 | 130m | [493MB (f32)](https://huggingface.co/state-spaces/mamba-130m/) | GPT-NeoX, 2MB | [▶ mamba1](https://swfsql.github.io/burn-mamba-example/mamba1) |
-| Mamba-2 | 130m | [247MB (f16)](https://huggingface.co/state-spaces/mamba2-130m/) | GPT-NeoX, 2MB | [▶ mamba2](https://swfsql.github.io/burn-mamba-example/mamba2) |
-| Mamba-3 SISO | 187m | [357MB (bf16)](https://huggingface.co/state-spaces/mamba3-siso-187m) | Llama-3.1, 17MB | [▶ mamba3-siso](https://swfsql.github.io/burn-mamba-example/mamba3-siso) |
-| Mamba-3 MIMO | 187m | [358MB (bf16)](https://huggingface.co/state-spaces/mamba3-mimo-187m) | Llama-3.1, 17MB | [▶ mamba3-mimo](https://swfsql.github.io/burn-mamba-example/mamba3-mimo) |
+| Mamba-1 | 130m | [493MB (f32)](https://huggingface.co/state-spaces/mamba-130m/) | GPT-NeoX, 2MB | [▶ mamba1-130m](https://swfsql.github.io/burn-mamba-example/mamba1-130m) |
+| Mamba-2 | 130m | [247MB (f16)](https://huggingface.co/state-spaces/mamba2-130m/) | GPT-NeoX, 2MB | [▶ mamba2-130m](https://swfsql.github.io/burn-mamba-example/mamba2-130m) |
+| Mamba-3 SISO | 187m | [357MB (bf16)](https://huggingface.co/state-spaces/mamba3-siso-187m) | Llama-3.1, 17MB | [▶ mamba3-siso-187m](https://swfsql.github.io/burn-mamba-example/mamba3-siso-187m) |
+| Mamba-3 MIMO | 187m | [358MB (bf16)](https://huggingface.co/state-spaces/mamba3-mimo-187m) | Llama-3.1, 17MB | [▶ mamba3-mimo-187m](https://swfsql.github.io/burn-mamba-example/mamba3-mimo-187m) |
 
 Weights are materialised as **f32** at load time, so one code path serves all
 three stored dtypes. The browser pages fetch on demand and cache into IndexedDB
@@ -28,8 +28,8 @@ page.
 - **Full client-side inference** — weights, tokenizer, sampling and generation all
   run in the browser via WASM.
 - **Four checkpoints, one codebase** — Mamba-1/2 130m and both Mamba-3 187m
-  topologies. Which one runs is plain runtime data (a `ModelSpec` picked out of
-  `hf::MODELS`), so several can be compiled into one binary.
+  topologies. Which one runs is plain runtime data (a `CheckpointSpec` picked out of
+  `hf::CHECKPOINTS`), so several can be compiled into one binary.
 - **Both execution modes** — a recurrent `step()` for decoding and a chunkwise
   `forward()` over the whole prompt; running both on one prompt is how this repo
   checks a backend (see [Verifying a backend](#verifying-a-backend)).
@@ -45,7 +45,7 @@ page.
 ```bash
 # native: downloads the weights on first run, then generates
 RUSTFLAGS="-C target-cpu=native" cargo run --release --no-default-features \
-  --features "native,backend-flex,backend-simd,mamba2"
+  --features "native,backend-flex,backend-simd,mamba2-130m"
 ```
 
 The run prints the generated text twice — once decoded sequentially, once
@@ -54,34 +54,34 @@ computed in parallel — plus timings for each.
 ## Features are the configuration
 
 `default = []` builds the bare crate as a library (just `common/`). **Every useful
-build is a `--no-default-features --features "…"` combination** of one *target* ×
-one or more *models* × one *backend*:
+build is a `--no-default-features --features "…"` combination** of one *front-end* ×
+one or more *checkpoints* × one *backend*:
 
 | Axis | Choices |
 |---|---|
-| target | `native` (binary) · *nothing* (wasm console log) · `yew` (wasm UI) |
-| model | `mamba1` · `mamba2` · `mamba3-siso` · `mamba3-mimo` — **any combination** |
+| front-end | `native` (binary) · `console` (wasm console log) · `yew` (wasm UI) |
+| checkpoint | `mamba1-130m` · `mamba2-130m` · `mamba3-siso-187m` · `mamba3-mimo-187m` — **any combination** |
 | backend | `backend-{flex,ndarray,cpu,wgpu,vulkan,cuda,tch-cpu,tch-gpu}` |
 | extras | `backend-simd` · `backend-fusion` · `backend-autotune` |
 
-Model features **combine**. A binary or wasm bundle carries every checkpoint
+Checkpoint features **combine**. A binary or wasm bundle carries every checkpoint
 enabled at compile time and runs a single one — the highest priority, which is
-`mamba3-mimo` > `mamba3-siso` > `mamba2` > `mamba1`. The native binary logs which
-one it picked along with everything compiled in, and `MAMBA_MODEL=<id>` overrides
-the pick:
+`mamba3-mimo-187m` > `mamba3-siso-187m` > `mamba2-130m` > `mamba1-130m`. The native
+binary logs which one it picked along with everything compiled in, and
+`MAMBA_CHECKPOINT=<id>` overrides the pick:
 
 ```bash
-# one binary with every model; runs mamba3-mimo unless told otherwise
+# one binary with every checkpoint; runs mamba3-mimo-187m unless told otherwise
 cargo run --release --no-default-features \
-  --features "native,backend-flex,backend-simd,mamba1,mamba2,mamba3-siso,mamba3-mimo"
-MAMBA_MODEL=mamba1 cargo run --release --no-default-features \
-  --features "native,backend-flex,backend-simd,mamba1,mamba2,mamba3-siso,mamba3-mimo"
+  --features "native,backend-flex,backend-simd,mamba1-130m,mamba2-130m,mamba3-siso-187m,mamba3-mimo-187m"
+MAMBA_CHECKPOINT=mamba1-130m cargo run --release --no-default-features \
+  --features "native,backend-flex,backend-simd,mamba1-130m,mamba2-130m,mamba3-siso-187m,mamba3-mimo-187m"
 ```
 
-`mamba3-siso` and `mamba3-mimo` both imply `mamba3`, which enables the blocks in
-`burn-mamba`. `mamba3` **alone is library-only** — it names no checkpoint (the two
-differ in `mimo_rank`, `d_intermediate` and `chunk_size`), and the entry points
-`compile_error!` without one.
+Each checkpoint feature implies its family feature — `mamba1`, `mamba2` or
+`mamba3` — which enables the blocks in `burn-mamba`. A family feature **alone is
+library-only** — it names no checkpoint, and the entry points `compile_error!`
+without one. A wasm bundle needs exactly one of `console` and `yew`.
 
 When several backends are compiled in, `BURN_DEVICE` chooses at runtime.
 
@@ -116,7 +116,7 @@ output is informative — coherent tokens, no panics, sensible punctuation.
 ### Native (console)
 
 ```bash
-MAMBA="mamba2"  # or mamba1, mamba3-siso, mamba3-mimo, or several comma-separated
+MAMBA="mamba2-130m"  # or mamba1-130m, mamba3-siso-187m, mamba3-mimo-187m, or several comma-separated
 export RUSTFLAGS="-C target-cpu=native"
 cargo check --no-default-features --features "native,backend-flex,backend-simd,$MAMBA"
 cargo run --release --no-default-features --features "native,backend-flex,backend-simd,$MAMBA"
@@ -165,23 +165,23 @@ files — e.g. [miniserve](https://github.com/svenstaro/miniserve).
 **Web console log** — no UI; fetches, loads and generates into the browser console:
 
 ```bash
-MAMBA="mamba2"
+MAMBA="mamba2-130m"
 cargo +nightly check --target wasm32-unknown-unknown --no-default-features \
-  --features "backend-flex,backend-simd,$MAMBA"
+  --features "console,backend-flex,backend-simd,$MAMBA"
 wasm-pack build --release --target web --out-dir "frontend/$MAMBA/pkg" \
-  --no-default-features --features "backend-flex,backend-simd,$MAMBA"
-miniserve -i 127.0.0.1 "frontend/"   # then open /mamba2/index.html
+  --no-default-features --features "console,backend-flex,backend-simd,$MAMBA"
+miniserve -i 127.0.0.1 "frontend/"   # then open /mamba2-130m/index.html
 ```
 
 **Web Yew UI** — the interactive page, with per-asset controls and a prompt box:
 
 ```bash
-MAMBA="mamba2"
+MAMBA="mamba2-130m"
 cargo +nightly check --target wasm32-unknown-unknown --no-default-features \
   --features "yew,backend-flex,backend-simd,$MAMBA"
 wasm-pack build --release --target web --out-dir "frontend/$MAMBA/pkg" --no-opt \
   --no-default-features --features "yew,backend-flex,backend-simd,$MAMBA"
-miniserve -i 127.0.0.1 "frontend/"   # then open /mamba2/index.html
+miniserve -i 127.0.0.1 "frontend/"   # then open /mamba2-130m/index.html
 ```
 
 Notes:
@@ -192,9 +192,9 @@ Notes:
   file, or supplied from a local file instead of the network.
 - Generation runs sequentially, one token per timer tick, so the browser keeps
   painting; it can be paused, resumed and reset.
-- The deployed pages are one model per bundle (`frontend/mamba1`, `frontend/mamba2`, …);
-  a bundle built with several model features runs the highest-priority one, named
-  on its asset card.
+- The deployed pages are one checkpoint per bundle (`frontend/mamba1-130m`,
+  `frontend/mamba2-130m`, …); a bundle built with several checkpoint features runs the
+  highest-priority one, named on its asset card.
 - `getrandom` needs `--cfg getrandom_backend="wasm_js"`, already set in
   `.cargo/config.toml`.
 
@@ -318,7 +318,7 @@ one parameter and no remapping rule matching nothing.
 
 ```bash
 cargo test --no-default-features \
-  --features "backend-flex,backend-simd,mamba1,mamba2,mamba3-siso,mamba3-mimo"
+  --features "backend-flex,backend-simd,mamba1-130m,mamba2-130m,mamba3-siso-187m,mamba3-mimo-187m"
 ```
 
 Two tests are `#[ignore]`d. Whole-pipeline tokenizer parity needs a downloaded
@@ -338,7 +338,7 @@ checkpoint rather than about the transcribed part of it.
 
 ```bash
 cargo test --no-default-features \
-  --features "backend-flex,backend-simd,mamba1,mamba2,mamba3-siso,mamba3-mimo" \
+  --features "backend-flex,backend-simd,mamba1-130m,mamba2-130m,mamba3-siso-187m,mamba3-mimo-187m" \
   -- --ignored manifests_cover
 ```
 
