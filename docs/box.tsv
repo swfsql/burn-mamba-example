@@ -6,3 +6,4 @@ burn	git	https://github.com/tracel-ai/burn.git	v0.22.1	-	-
 hf-hub	git	https://github.com/swfsql/hf-hub.git	a411dde1a7ab30d782cb978955b922551fb7eeb1	-	-
 candle	git	https://github.com/huggingface/candle.git	0.8.4	-	-
 tokenizers	git	https://github.com/huggingface/tokenizers.git	v0.21.4	-	-
+py/state-spaces/mamba	git	https://github.com/state-spaces/mamba.git	a14b1dff0454a3bc27d9eb31355dc01e4b2490ec	-	-

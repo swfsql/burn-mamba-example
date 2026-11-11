@@ -1,3 +1,13 @@
+//! The core of the app. Each front-end and each backend uses it: the
+//! checkpoints ([hf]), the build of the network, the tokenizer, the sampler and
+//! the run wrapper.
+//!
+//! The backend is a run-time [Device]. Burn sends each tensor op to the backend
+//! of its device, so no type takes a backend generic. `BURN_DEVICE` selects one
+//! of the compiled-in backends. Before it builds a network, each entry point
+//! calls `Device::default()`, then `configure` with [PRECISION_FLOAT_D_TYPE]
+//! and [PRECISION_INT_D_TYPE]: f32 and i32 (ADR-0003).
+
 pub mod hub;
 pub mod sampling;
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
@@ -57,6 +67,41 @@ pub struct CheckpointSpec {
 }
 
 pub mod hf {
+    //! The checkpoints of the app: the hub files and the hardcoded topology of
+    //! each checkpoint (ADR-0002), and `CHECKPOINTS`, the checkpoints of this
+    //! build (ADR-0004).
+    //!
+    //! Each value of a topology copies the `config.json` of its checkpoint, or
+    //! the signature of the official code where `config.json` has no value. A
+    //! comment beside the value names its source. Two checkpoints with one
+    //! tokenizer can still differ: `pad_vocab_size_multiple` is 8 for
+    //! `mamba1-130m` and 16 for `mamba2-130m`.
+    //!
+    //! Code that depends on the checkpoint reads its `CheckpointSpec`. A value
+    //! that the topology does not hold, such as the chunk length of a Mamba-3
+    //! checkpoint, goes into the spec.
+    //!
+    //! # Add a checkpoint
+    //!
+    //! 1. The spec: a module here with `SPEC`, `topology()` and `ssd_path()`. A
+    //!    new tokenizer also needs a module here, and the tokenizer reader must
+    //!    support its pipeline.
+    //! 2. The list entry: an entry of `CHECKPOINTS` at its priority. Its id
+    //!    goes into the doc of `CHECKPOINTS` and into the priority test of this
+    //!    file. A Mamba-3 checkpoint also goes into the two Mamba-3 tests.
+    //! 3. The features: its checkpoint feature in `Cargo.toml`, which adds its
+    //!    family feature, and its id in the priority comment there. Its id goes
+    //!    into the `compile_error!` blocks of `src/native/mod.rs`,
+    //!    `src/wasm/mod.rs` and `benches/model.rs`.
+    //! 4. The manifest: its tensors in the tests of `src/common/store_load.rs`,
+    //!    in a `*_MANIFEST` and a `VENDORED` entry.
+    //! 5. The `frontend/<id>/` directory, with an `index.html` and an
+    //!    `index.js`.
+    //! 6. The deploy step: a bundle build in `.github/workflows/deploy.yml`, and
+    //!    its id in the loop of that workflow.
+    //! 7. Its id in the lists of `scripts/check.sh`, `bench.sh` and
+    //!    `kernels.sh`. Its id and its live demo in `README.md`.
+
     #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
     use crate::CheckpointSpec;
 
@@ -489,6 +534,16 @@ pub mod hf {
     );
 }
 
+/// The run wrapper: the tokenizer and the network of one checkpoint, with the
+/// two run modes over the same weights.
+///
+/// - [MambaWrapper::run_sequential] is a sequential run: one
+///   [MambaWrapper::step] for each token, with the caches. The browser page
+///   and the browser console call [MambaWrapper::step] directly.
+/// - [MambaWrapper::run_parallel] is a parallel run: for each new token, one
+///   forward over the whole sequence so far, with no cache.
+///
+/// The native binary does both runs of one prompt, for run agreement.
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 pub struct MambaWrapper {
     /// Which checkpoint this is — the run modes read the topology and the scan

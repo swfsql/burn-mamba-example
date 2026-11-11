@@ -1,10 +1,13 @@
 //! Loading the HF checkpoints into a [MambaVocabNet] through `burn-store`.
 //!
-//! The whole import is declarative: a [SafetensorsStore] gets a key remapping
-//! (`backbone.…` → the Burn module paths) plus an adapter chain that transposes
-//! `Linear` weights (PyTorch `[out, in]` → Burn `[in, out]`) and casts every float
-//! tensor to [crate::Precision]. That last cast is why both checkpoints share one
-//! code path even though mamba-130m stores f32 and mamba2-130m stores f16.
+//! [build_network] makes the network from its topology, applies the store to
+//! it, then calls [tie_lm_head].
+//!
+//! The whole import is declarative. A [SafetensorsStore] gets a key remapping
+//! (`backbone.…` → the Burn module paths) and an adapter chain. The chain
+//! transposes `Linear` weights (PyTorch `[out, in]` → Burn `[in, out]`) and casts
+//! every float tensor to [crate::Precision]. With that cast, the f32, f16 and
+//! bf16 checkpoints share one code path (ADR-0003).
 //!
 //! The load is strict. Each parameter of the network must get a checkpoint
 //! tensor, with one exception: [`ALLOWED_MISSING`], the parameters of the flag
@@ -115,7 +118,8 @@ fn key_remapping(topology: &MambaVocabNetConfig) -> Vec<(&'static str, &'static 
             r"^backbone\.layers\.(\d+)\.mixer\.",
             "layers.real_layers.$1.block.",
         ),
-        // backbone.layers.{i}.X -> layers.real_layers.{i}.X
+        // backbone.layers.{i}.X -> layers.real_layers.{i}.X. The `mlp` of
+        // Mamba-3 needs no other rule.
         (r"^backbone\.layers\.(\d+)\.", "layers.real_layers.$1."),
         // backbone.X -> X
         (r"^backbone\.", ""),

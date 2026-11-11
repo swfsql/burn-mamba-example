@@ -1,3 +1,23 @@
+//! The browser page, built with Yew. [Msg] is the whole protocol of the page,
+//! [update] is its reducer, and [view] renders the [Model] with Bulma.
+//!
+//! Each [Asset](model::Asset), the tokenizer file or the weights file, has two
+//! separate states: its [HubCacheState](model::HubCacheState) in IndexedDB, and
+//! its [Load](model::Load) in memory. So the page can fetch, erase, load and
+//! unload each asset separately.
+//!
+//! - [ApiRepo::check](crate::hub::wasm::ApiRepo::check) gives a
+//!   [DownloadChunkList]. It is the plan of the fetch, and also its progress
+//!   bar.
+//! - [MambaWrapperBuilder::with](model::MambaWrapperBuilder::with) builds the
+//!   tokenizer or the network from the loaded bytes of an asset, and drops the
+//!   bytes.
+//! - The page makes the [Wrapper](model::Wrapper) only after it builds the
+//!   tokenizer and the network.
+//!
+//! The generation does one step for each tick of a 1ms interval, so the
+//! browser can paint between two steps.
+
 pub mod model;
 pub mod update;
 pub mod view;
