@@ -1,6 +1,13 @@
 /* tslint:disable */
 /* eslint-disable */
 
+/**
+ * The entry point of the bundle. `index.js` calls it.
+ *
+ * It sets the panic hook and the logger, then starts the front-end of the
+ * bundle. The front-end sets the f32 and i32 defaults of the device before it
+ * builds the network.
+ */
 export function wasm_main(): Promise<void>;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;

@@ -1,6 +1,11 @@
 /* @ts-self-types="./burn_mamba_example.d.ts" */
 
 /**
+ * The entry point of the bundle. `index.js` calls it.
+ *
+ * It sets the panic hook and the logger, then starts the front-end of the
+ * bundle. The front-end sets the f32 and i32 defaults of the device before it
+ * builds the network.
  * @returns {Promise<void>}
  */
 export function wasm_main() {
@@ -615,7 +620,7 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_generic_0000000000000003: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("IDBVersionChangeEvent")], shim_idx: 138, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("IDBVersionChangeEvent")], shim_idx: 172, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_6ff4771a1a521ecc___convert__closures_____invoke___web_sys_d41c5b569c421e48___features__gen_IdbVersionChangeEvent__IdbVersionChangeEvent__core_cd2851b47156cd6d___result__Result_____wasm_bindgen_6ff4771a1a521ecc___JsValue___true_);
             return ret;
         },
