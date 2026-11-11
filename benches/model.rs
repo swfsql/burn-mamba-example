@@ -1,36 +1,37 @@
-//! # Whole-model benchmarks (`cargo bench --bench model`)
+//! # The network benchmarks (`cargo bench --bench model`)
 //!
-//! What the demo app actually runs, timed: one full `MambaVocabNet` language
-//! model — embedding → layers → `norm_f` → tied LM head — per compiled-in
-//! checkpoint, in both of the execution modes [`crate::MambaWrapper`] exposes.
+//! The bench times what the app runs. It runs the whole `MambaVocabNet` of
+//! each compiled-in checkpoint (embedding → layers → `norm_f` → tied LM head).
+//! It makes the calls of the two run modes of the run wrapper
+//! (`MambaWrapper`).
 //!
-//! | Group | What it runs | Mirrors |
-//! |-------|--------------|---------|
-//! | `forward` | one chunkwise pass over `[batch, sequence, 2]` token pairs | `run_parallel` |
-//! | `step`    | one recurrent decode step from the previous step's cache | `run_sequential` |
+//! | Group | What it runs | Same call as |
+//! |-------|--------------|--------------|
+//! | `forward` | one forward over `[batch, sequence, 2]` token pairs | `run_parallel` |
+//! | `step`    | one step from the cache of the step before | `run_sequential` |
 //!
-//! Cases are the [`CheckpointSpec::id`]s of [`hf::CHECKPOINTS`] —
-//! `mamba1-130m`, `mamba2-130m`, `mamba3-siso-187m`, `mamba3-mimo-187m` — so a
-//! build decides what gets measured by its checkpoint features, exactly as it
-//! decides what the binary can run. Each case uses that checkpoint's own
-//! [`CheckpointSpec::topology`] and [`CheckpointSpec::ssd_path`], unmodified:
-//! the real layer count, `d_model`, vocabulary, MIMO rank and trained SSD chunk
-//! length.
+//! The cases are the [`CheckpointSpec::id`]s of [`hf::CHECKPOINTS`]:
+//! `mamba1-130m`, `mamba2-130m`, `mamba3-siso-187m` and `mamba3-mimo-187m`.
+//! So the checkpoint features of a build decide what the bench measures, as
+//! they decide what the binary can run. Each case uses the
+//! [`CheckpointSpec::topology`] and the [`CheckpointSpec::ssd_path`] of its
+//! checkpoint, with no change. So it has the real layer count, `d_model`,
+//! vocabulary, MIMO rank and chunk length of the training.
 //!
 //! ## Random weights
 //!
-//! The weights are `topology().init(&device)`'s random initialisation, not the HF
-//! checkpoint — the timings depend on the shapes, not the values, and this keeps
-//! the bench a ~2s startup instead of a ~500MB download. The topology is the
-//! deployed one all the same, including [`tie_lm_head`]: the checkpoints set
-//! `missing_lm_head: true`, and loading materialises the head by transposing the
-//! embedding. Skipping that would silently measure the untied fallback, which
-//! re-transposes a `[padded_vocab, d_model]` table on every single call.
+//! The weights are the random init of `topology().init(&device)`, not the
+//! weights of the checkpoint. The timings depend on the shapes, not on the
+//! values. So the bench is ready in about 2s, with no fetch of about 500MB. The
+//! topology is still the deployed one, with [`tie_lm_head`]. The checkpoints
+//! set `missing_lm_head: true`, and the load makes the head from the transposed
+//! embedding. Without that call, the bench measures the tied head of the vocab
+//! network, which transposes a `[padded_vocab, d_model]` table at each call.
 //!
-//! One network per checkpoint serves both groups, and is dropped before the next
-//! checkpoint's is built: the two Mamba-3 187m nets are ~1.1GB of f32 parameters
-//! each once the head is materialised, so holding all four at once needs ~3.6GB
-//! of device memory for no benefit.
+//! One network for each checkpoint serves both groups. The bench drops it
+//! before it builds the network of the next checkpoint. With its head, each
+//! Mamba-3 187m network holds about 1.1GB of f32 parameters. So the four
+//! networks at once need about 3.6GB of device memory, for no benefit.
 //!
 //! ## Running
 //!
@@ -38,85 +39,89 @@
 //! cargo bench --bench model --no-default-features \
 //!   --features "backend-flex,backend-simd,mamba1-130m,mamba2-130m,mamba3-siso-187m,mamba3-mimo-187m"
 //!
-//! # CUDA as deployed — kernel fusion and autotuning on:
+//! # CUDA, with kernel fusion and autotune:
 //! BURN_DEVICE=cuda cargo bench --bench model --no-default-features \
 //!   --features "backend-cuda,backend-fusion,backend-autotune,mamba1-130m,mamba2-130m,mamba3-siso-187m,mamba3-mimo-187m"
 //! ```
 //!
-//! Several backends can be compiled in at once and `BURN_DEVICE` picks one at
-//! runtime, so flex and CUDA are the same binary; only kernel fusion, being
-//! compile-time, needs a build of its own. [`bench.sh`] drives all three
-//! configurations that way — two builds — and collects the results into
-//! `bench.md`; run it rather than these lines when you want the comparison.
-//! [`kernels.sh`] reuses those builds to count kernel launches per case.
+//! A build can hold several backends, and `BURN_DEVICE` picks one at run time.
+//! So flex and CUDA run from one binary. Kernel fusion and
+//! `-C target-cpu=native` are compile-time choices, so each one needs its own
+//! build. [`bench.sh`] runs its four bench configurations from three builds,
+//! and writes the results into `bench.md`. For the comparison, run it, not the
+//! lines above. [`kernels.sh`] uses the same builds to count the kernel
+//! launches of each case.
 //!
 //! [`bench.sh`]: https://github.com/swfsql/burn-mamba-example/blob/main/bench.sh
 //! [`kernels.sh`]: https://github.com/swfsql/burn-mamba-example/blob/main/kernels.sh
 //!
-//! ## Warm-up, the probe, and the one-minute budget
+//! ## The warm-up, the probe, and the budget of one minute
 //!
-//! One iteration here is tens of milliseconds on CUDA and *seconds* on a CPU
-//! backend — a 300× spread — so how many of them a case should run cannot be a
-//! constant. Each case is planned from a measurement of itself:
+//! One iteration takes tens of milliseconds on CUDA and *seconds* on a CPU
+//! backend: a spread of 300×. So the count of iterations of a case cannot be a
+//! constant. The bench plans each case from a measurement of the case:
 //!
-//! 1. [`warmup_iters`] untimed iterations, so kernel compilation and autotuning
-//!    are finished before anything is measured,
-//! 2. **one timed iteration** — the probe. It is the single call [`configure`]
-//!    leaves criterion's own warm-up, so it costs one iteration, not two,
-//! 3. `iters/sample = clamp(BENCH_BUDGET_MS / (samples · probe), 1, 10)`, giving
-//!    a case between [`MIN_SAMPLES`] and [`MAX_ITERATIONS`] measured iterations
-//!    inside [`budget`] (default 60s). The warm-up and the probe sit outside the
-//!    budget; [`Plan`]'s deadline then stops a case that overruns it anyway,
-//!    always after a whole iteration.
+//! 1. [`warmup_iters`] untimed iterations. After them, the kernel compilation
+//!    and the autotune are complete.
+//! 2. **One timed iteration**: the probe. [`configure`] leaves this one call to
+//!    the warm-up of criterion, so the probe costs one iteration, not two.
+//! 3. `iters/sample = clamp(BENCH_BUDGET_MS / (samples · probe), 1, 10)`. This
+//!    gives a case between [`MIN_SAMPLES`] and [`MAX_ITERATIONS`] measured
+//!    iterations inside [`budget`] (default 60s). The warm-up and the probe are
+//!    outside the budget. If a case overruns the budget, the deadline of
+//!    [`Plan`] stops it, always after a whole iteration.
 //!
-//! Criterion asserts on fewer than ten samples, so a case whose single iteration
-//! costs more than a tenth of the budget cannot be capped — the `bench-plan` line
-//! says `over-budget` instead of quietly overrunning. That is deliberately the
-//! same guarantee the dfdx sibling's bench gives, since the two reports are meant
-//! to be read side by side: the budget buys fewer samples of the *deployed*
-//! workload, and never a smaller workload.
+//! Criterion asserts on fewer than ten samples. So when one iteration of a case
+//! costs more than a tenth of the budget, the bench cannot cap the case. Then
+//! the `bench-plan` line says `over-budget`, so the overrun is visible. The
+//! budget buys fewer samples of the workload of the app, and never a smaller
+//! workload.
 //!
-//! A sample is therefore the *mean* of `iters/sample` model passes, and the median
-//! of those means is what `bench.md` reports. The number is the per-pass cost
-//! either way; only criterion's interval around it is tighter than the spread of
-//! single passes would be.
+//! So a sample is the *mean* of `iters/sample` iterations, and `bench.md`
+//! reports the median of those means. In both cases, the number is the cost of
+//! one iteration. Only the interval of criterion around it is narrower than
+//! the spread of single iterations.
 //!
-//! Every measured iteration ends in a device sync ([`timed`]), which is how
-//! generation itself is paced: both run modes read the logits back before they
-//! can issue the next call.
+//! Each measured iteration ends in a device sync ([`timed`]). The generation
+//! has the same pace: both run modes read the logits back before the next
+//! call.
 //!
-//! Criterion re-enters the benchmark closure once per sample, so the network, its
-//! input and the warm-up are built there on the first call and kept for the rest
-//! — lazily, which is also what keeps a filtered run (`-- mamba2-130m`) from building
-//! or warming up anything else. That is what lets [`kernels.sh`] attribute kernel
-//! launches to a single case: it reads the summary tables cubecl flushes on each
-//! sync, running with `BENCH_WARMUP_ITERS=1` and `BENCH_SYNC_EVERY=0` under
-//! criterion's `--test` mode — which takes one sample and no warm-up, hence no
-//! probe, so the *last* table a case emits is its lone measured iteration.
-//! (Earlier tables are the warm-up's, plus one per autotune candidate.) Those
-//! tables are written by a detached logger task that lags the benchmark, so that
-//! run also sets `BENCH_LOG_DRAIN_MS` — see [`timed`].
+//! Criterion enters the bench closure again for each sample. So the closure
+//! builds the network, its input and the warm-up at the first call, and keeps
+//! them for the other calls. The build is lazy, so a filtered run
+//! (`-- mamba2-130m`) builds no other network and runs no other warm-up. This
+//! lets [`kernels.sh`] give the kernel launches of each case:
+//!
+//! - It reads the summary tables that cubecl writes at each sync.
+//! - It runs with `BENCH_WARMUP_ITERS=1` and `BENCH_SYNC_EVERY=0`, in the
+//!   `--test` mode of criterion. That mode takes one sample and no warm-up, so
+//!   no probe. So the *last* table of a case is its one measured iteration. The
+//!   tables before it are the tables of the warm-up, and one table for each
+//!   autotune candidate.
+//! - A detached logger task writes the tables, and the task lags the bench. So
+//!   the run also sets `BENCH_LOG_DRAIN_MS` (see [`timed`]).
 //!
 //! ## Sizing
 //!
-//! The topology is the checkpoint's, so the free knobs are the input shape
-//! (`BENCH_BATCH`, `BENCH_SEQ`), the budget (`BENCH_BUDGET_MS`) and the sample
-//! count `BENCH_SAMPLES` / drain policy `BENCH_WARMUP_ITERS`, `BENCH_SYNC_EVERY`
-//! (plus `BENCH_LOG_DRAIN_MS`, which only `kernels.sh` needs).
-//! The defaults are the app's own regime — a single stream (`batch=1`) over a
-//! short prompt.
+//! The topology is the topology of the checkpoint. So the free values are the
+//! input shape (`BENCH_BATCH`, `BENCH_SEQ`), the budget (`BENCH_BUDGET_MS`),
+//! the sample count (`BENCH_SAMPLES`) and the drain policy
+//! (`BENCH_WARMUP_ITERS`, `BENCH_SYNC_EVERY`). `BENCH_LOG_DRAIN_MS` is also
+//! free, and only `kernels.sh` needs it. The defaults are the regime of the
+//! app: a batch of one (`batch=1`) over a short prompt.
 //!
 //! ```bash
 //! BENCH_SEQ=1024 cargo bench --bench model --no-default-features \
 //!   --features "backend-cuda,mamba2-130m" -- forward
 //! ```
 //!
-//! Raising `BENCH_SEQ` does not extend a run; it buys fewer samples of a longer
-//! iteration, until one iteration alone exceeds a tenth of the budget and the
-//! plan goes `over-budget`. `forward/mamba1-130m` gets there first on a CPU backend:
-//! Mamba-1 has no SSD pathway, so its "parallel" mode is still a sequential
-//! per-token scan — 24 layers × `seq` steps. Filter it out while iterating
-//! (`cargo bench --bench model -- 'mamba[23]'`) or shorten the sequence for it.
+//! A larger `BENCH_SEQ` does not make a run longer. It buys fewer samples of a
+//! longer iteration, until one iteration alone exceeds a tenth of the budget.
+//! Then the plan says `over-budget`. On a CPU backend, `forward/mamba1-130m`
+//! gets there first. Mamba-1 has no SSD, so its forward scans one token at a
+//! time: 24 layers × `seq` recurrence steps. While you iterate, exclude it with
+//! a filter (`cargo bench --bench model -- 'mamba[23]'`), or give it a shorter
+//! sequence.
 
 use burn::prelude::*;
 use burn_mamba::prelude::*;
@@ -131,9 +136,9 @@ use std::cell::Cell;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-/// Both entry points below need something to measure; a family feature on its
-/// own enables the blocks but no checkpoint, so [`hf::CHECKPOINTS`] would be
-/// empty and every group would report nothing.
+/// The two groups need a checkpoint to measure. A family feature alone adds the
+/// blocks, but no checkpoint. Then [`hf::CHECKPOINTS`] is empty, and each group
+/// reports nothing.
 #[cfg(not(any(
     feature = "mamba1-130m",
     feature = "mamba2-130m",
@@ -149,9 +154,9 @@ compile_error!(
 // Shapes
 // ---------------------------------------------------------------------------
 
-/// The input shape every case is measured at. Unlike the per-block bench in
-/// `burn-mamba`, the *model* dimensions are not tunable — they are whatever the
-/// checkpoint says.
+/// The input shape of each case. The per-block bench of `burn-mamba` can tune
+/// the dimensions of the network. This bench cannot: they are the dimensions
+/// of the checkpoint.
 #[derive(Clone, Copy, Debug)]
 struct Shape {
     batch: usize,
@@ -171,18 +176,19 @@ impl Shape {
         (self.batch * self.sequence) as u64
     }
 
-    /// Print the effective configuration once per process, so a bench log is
-    /// self-describing (`bench.sh` reads this line back into its report).
+    /// Prints the settings of the run, once for each process, so that a bench
+    /// log describes itself. `bench.sh` copies this line into its report.
     fn announce(&self, device: &Device) {
         use std::sync::Once;
         static ONCE: Once = Once::new();
         ONCE.call_once(|| {
             let Self { batch, sequence } = self;
-            // `Backend::name` nests the wrappers that are *compiled in*, e.g.
-            // `dispatch<fusion<cubecl<cuda>>>` vs `dispatch<cubecl<cuda>>`, so
-            // the log proves which flavour ran instead of trusting the feature
-            // flags. (Fusion is a compile-time type alias in `burn_cuda`, not a
-            // device property.)
+            // `Backend::name` nests the wrappers that the build *compiled in*,
+            // for example `dispatch<fusion<cubecl<cuda>>>` or
+            // `dispatch<cubecl<cuda>>`. So the log shows which backend ran, and
+            // the reader does not have to trust the feature flags. Fusion is a
+            // compile-time type alias in `burn_cuda`, not a property of the
+            // device.
             let backend =
                 <burn::backend::Dispatch as burn::backend::Backend>::name(device.as_dispatch());
             eprintln!(
@@ -198,13 +204,14 @@ impl Shape {
     }
 }
 
-/// The widest SIMD ISA this build was *compiled* for — the visible effect of
-/// `-C target-cpu=native`, which is the only axis between [`bench.sh`]'s two CPU
-/// columns. Reported rather than trusted from the environment, since `RUSTFLAGS` is
-/// easy to set and easy to have silently dropped by a stale build.
+/// The widest SIMD ISA of the *compile* of this build. It shows the effect of
+/// `-C target-cpu=native`, the CPU flag that separates the two CPU columns of
+/// [`bench.sh`]. The bench reports it, and does not trust the environment: a
+/// stale build can drop `RUSTFLAGS` with no message.
 ///
-/// It says nothing about the CUDA columns: cubecl compiles their kernels for the
-/// device at runtime, so only the host code around them is built for this ISA.
+/// For the CUDA columns, it tells nothing: cubecl compiles their kernels for
+/// the device at run time. So only the host code around those kernels has
+/// this ISA.
 ///
 /// [`bench.sh`]: https://github.com/swfsql/burn-mamba-example/blob/main/bench.sh
 fn simd_level() -> &'static str {
@@ -235,14 +242,14 @@ fn env_usize(key: &str, default: usize) -> usize {
 // Devices and timing
 // ---------------------------------------------------------------------------
 
-/// The device every case runs on, with the crate's f32/i32 defaults installed —
-/// the same two lines every entry point starts with, so the bench measures the
-/// precision the app actually uses.
+/// The device of each case, with the f32 and i32 defaults of the crate. Each
+/// entry point runs the same two lines first. So the bench measures the
+/// precision that the app uses.
 ///
-/// `configure` writes process-global per-device defaults and refuses a second
-/// call (`DeviceError::AlreadyInitialized`), so the [`Once`] is load-bearing:
-/// each group asks for the device separately, and only the first may configure
-/// it. Every later `Device::default()` still sees those defaults.
+/// `configure` writes the defaults of a device for the whole process, and
+/// refuses a second call (`DeviceError::AlreadyInitialized`). So the [`Once`]
+/// is necessary: each group asks for the device, and only the first call can
+/// configure it. Each later `Device::default()` sees the same defaults.
 ///
 /// [`Once`]: std::sync::Once
 fn device() -> Device {
@@ -253,50 +260,51 @@ fn device() -> Device {
     CONFIGURED.call_once(|| {
         device
             .configure((PRECISION_FLOAT_D_TYPE, PRECISION_INT_D_TYPE))
-            .expect("failed to install fp32/i32 device defaults");
+            .expect("failed to set the f32 and i32 defaults of the device");
     });
     device
 }
 
-/// Block until every queued operation has actually run.
+/// Waits until each queued operation ran.
 ///
-/// The GPU backends are asynchronous: without this a measured iteration would
-/// only time the op *submission*, and the real work would land in whichever
-/// iteration happens to synchronise next.
+/// The GPU backends are asynchronous. Without this sync, a measured iteration
+/// times only the *submission* of the ops, and the work goes into the next
+/// iteration that syncs.
 fn sync(device: &Device) {
     device.sync().expect("device sync failed");
 }
 
-/// Run the work criterion asked for and report the mean cost of **one whole
-/// model pass**, draining the device **every iteration**.
+/// Runs the work that criterion asks for, and reports the mean cost of **one
+/// whole iteration**. It drains the device **after each iteration**.
 ///
-/// Two policies live here.
+/// The function has two policies.
 ///
-/// *Drain.* The cubecl backends are asynchronous, so a drain policy has to be
-/// chosen. The per-block bench in `burn-mamba` submits a whole criterion batch
-/// and drains once, to measure steady-state throughput; a *whole-model* bench
-/// wants the opposite, for two reasons:
+/// *Drain.* The cubecl backends are asynchronous, so the bench must choose a
+/// drain policy. The per-block bench of `burn-mamba` submits a whole criterion
+/// batch and drains once, to measure the steady throughput. A bench of the
+/// *whole network* needs the opposite policy, for two reasons:
 ///
-/// - It is what the app does. Both run modes end in `into_data()` — `step` has
-///   to read the logits back to sample the next token before it can issue the
-///   next call, and `run_parallel` likewise. Generation is a sequence of
-///   submit-then-drain round trips; that latency is part of the cost.
-/// - One iteration is already a deep queue (12-24 layers, hundreds of kernels),
-///   so the GPU stays fed and the round trip is a small fraction of it — while
-///   queueing hundreds of unfinished full-model passes, each holding its
-///   `[batch, sequence, padded_vocab]` logits, is a real way to exhaust device
+/// - The app does it. Both run modes end in `into_data()`. `step` must read the
+///   logits back to sample the next token before the next call, and
+///   `run_parallel` does the same. So the generation is a sequence of round
+///   trips (submit, then drain), and their latency is part of the cost.
+/// - One iteration is already a deep queue (12 to 24 layers, hundreds of
+///   kernels). So the GPU has enough work, and the round trip is a small part
+///   of the iteration. But a queue of hundreds of incomplete iterations, each
+///   with its `[batch, sequence, padded_vocab]` logits, can use all the device
 ///   memory.
 ///
-/// `BENCH_SYNC_EVERY=N` drains every `N` iterations instead (`0` drains only at
-/// the end, the throughput-oriented policy). The drain stays *inside* the timed
-/// region either way, so no work escapes the measurement.
+/// `BENCH_SYNC_EVERY=N` drains after each `N` iterations. `0` drains only at
+/// the end: the throughput policy. The drain is always *inside* the timed
+/// region, so the measurement includes all the work.
 ///
-/// *Budget.* Criterion asks for a fixed one iteration per sample (see
-/// [`configure`]); this runs [`Plan::iters_per_sample`] real ones for each and
-/// reports their mean, which is how the budget — not `measurement_time` — decides
-/// how much a case measures. The first call is the probe that plans the rest, and
-/// [`Plan::spent`] cuts a case short if the plan overruns anyway, always between
-/// whole iterations so every sample holds at least one complete model pass.
+/// *Budget.* Criterion asks for one iteration for each sample (see
+/// [`configure`]). This function runs [`Plan::iters_per_sample`] real
+/// iterations for each one, and reports their mean. So the budget, not
+/// `measurement_time`, decides how much a case measures. The first call is the
+/// probe that plans the other calls. If the plan overruns, [`Plan::spent`]
+/// stops the case early. It stops only between two whole iterations, so each
+/// sample holds at least one complete iteration.
 fn timed<T>(device: &Device, plan: &Plan, iters: u64, mut work: impl FnMut() -> T) -> Duration {
     let sync_every = env_usize("BENCH_SYNC_EVERY", 1) as u64;
     let planned = iters.saturating_mul(plan.iters_per_sample()).max(1);
@@ -318,12 +326,12 @@ fn timed<T>(device: &Device, plan: &Plan, iters: u64, mut work: impl FnMut() -> 
     let per_iter = start.elapsed().div_f64(done as f64);
     plan.observe(per_iter);
 
-    // cubecl logs profiling on a detached task, so `sync` returns while the
-    // summary table for what just ran is still queued behind it. `kernels.sh`
-    // reads those tables and needs each case's to land before the next case
-    // starts — and the last case's to land at all, rather than be cut off when
-    // the process exits mid-flush. `BENCH_LOG_DRAIN_MS` is the pause that lets
-    // the logger catch up; it sits outside the timing, and is off by default.
+    // cubecl logs the profile on a detached task. So `sync` returns while the
+    // summary table of the last work is still in the queue. `kernels.sh` reads
+    // those tables. It needs the table of each case before the next case, and
+    // the table of the last case before the process exits.
+    // `BENCH_LOG_DRAIN_MS` is a pause that lets the logger write them. The
+    // pause is outside the timing, and it is off by default.
     let drain = env_usize("BENCH_LOG_DRAIN_MS", 0) as u64;
     if drain > 0 {
         std::thread::sleep(Duration::from_millis(drain));
@@ -332,13 +340,13 @@ fn timed<T>(device: &Device, plan: &Plan, iters: u64, mut work: impl FnMut() -> 
     per_iter.mul_f64(iters as f64)
 }
 
-/// How many untimed iterations to run before the probe.
+/// The count of the untimed iterations before the probe.
 ///
-/// A cubecl backend compiles a kernel on its first execution for a given shape,
-/// and with autotune it also *tunes* it then — one-off costs that must not land
-/// in a measurement. Criterion's own warm-up cannot absorb them, since
-/// [`configure`] shortens it to the single call that serves as the probe, so this
-/// is the explicit floor (`BENCH_WARMUP_ITERS`, default 2).
+/// A cubecl backend compiles a kernel at its first run for a given shape. With
+/// autotune, it also *tunes* the kernel then. These costs occur one time, and
+/// must not go into a measurement. The warm-up of criterion cannot take them,
+/// because [`configure`] makes that warm-up one call: the probe. So this count
+/// is the explicit minimum (`BENCH_WARMUP_ITERS`, default 2).
 fn warmup_iters() -> usize {
     env_usize("BENCH_WARMUP_ITERS", 2)
 }
@@ -347,18 +355,17 @@ fn warmup_iters() -> usize {
 // The budget
 // ---------------------------------------------------------------------------
 
-/// Criterion asserts on anything smaller, so this is the real floor on how short
-/// a case can be made: ten measured iterations, whatever one of them costs.
+/// The minimum count of samples. Criterion asserts on a smaller count. So a
+/// case has at least ten measured iterations, whatever one iteration costs.
 const MIN_SAMPLES: usize = 10;
 
-/// Ceiling on a case's measured iterations — beyond this the budget would buy
-/// precision no one is reading. It is also what the dfdx sibling's bench caps its
-/// *sample* count at, so both reports rest on comparable amounts of measurement.
+/// The maximum count of the measured iterations of a case. More iterations
+/// give a precision that no reader uses.
 const MAX_ITERATIONS: u64 = 100;
 
-/// Wall-clock ceiling for a case's *measured* iterations — the warm-up and the
-/// probe are outside it. `BENCH_BUDGET_MS`, default 60s; `0` asks for the floor,
-/// [`MIN_SAMPLES`] iterations and nothing more.
+/// The maximum wall-clock time of the *measured* iterations of a case. The
+/// warm-up and the probe are outside it. It is `BENCH_BUDGET_MS`, default 60s.
+/// With `0`, a case runs only [`MIN_SAMPLES`] iterations.
 fn budget() -> Duration {
     Duration::from_millis(env_usize("BENCH_BUDGET_MS", 60_000) as u64)
 }
@@ -368,28 +375,32 @@ fn samples() -> usize {
     env_usize("BENCH_SAMPLES", MIN_SAMPLES).max(MIN_SAMPLES)
 }
 
-/// How much of one case to measure, decided from the case's own first iteration.
+/// How much of one case to measure. The first iteration of the case decides
+/// it.
 ///
-/// Criterion sizes a run from a warm-up estimate and never takes fewer than
-/// [`MIN_SAMPLES`] samples, so `measurement_time` cannot bound a slow case: at
-/// ten seconds an iteration it plans ten of them and spends two minutes on one
-/// row of `bench.md`. So [`configure`] pins criterion to the least it will do —
-/// one iteration per sample — and the real plan lives here: [`timed`] runs
-/// [`Plan::iters_per_sample`] iterations for each one criterion asks for.
+/// Criterion sizes a run from an estimate of its warm-up, and never takes
+/// fewer than [`MIN_SAMPLES`] samples. So `measurement_time` cannot limit a
+/// slow case. At ten seconds for each iteration, criterion plans ten
+/// iterations, and spends two minutes on one row of `bench.md`. So
+/// [`configure`] sets criterion to its minimum: one iteration for each sample.
+/// The real plan is here: [`timed`] runs [`Plan::iters_per_sample`] iterations
+/// for each iteration that criterion asks for.
 ///
-/// The clock starts when the probe finishes ([`Plan::observe`]), so building the
-/// model and the untimed warm-up are outside the budget, and [`Plan::spent`] is
-/// only ever consulted *after* an iteration has completed — a case always
-/// measures at least one whole model pass, however long that takes.
+/// The clock runs from the end of the probe ([`Plan::observe`]). So the build
+/// of the network and the untimed warm-up are outside the budget. The bench
+/// calls [`Plan::spent`] only *after* a complete iteration. So a case always
+/// measures at least one whole iteration, however long it takes.
 struct Plan {
     /// `group/case`, for the plan line.
     id: (&'static str, &'static str),
     budget: Duration,
     samples: u64,
-    /// Real iterations per iteration criterion asks for; `1` until the probe has
-    /// been observed, which is what makes that first call a probe.
+    /// The real iterations for each iteration that criterion asks for. It is
+    /// `1` until [`Plan::observe`] sees the probe, so the first call is a
+    /// probe.
     iters_per_sample: Cell<u64>,
-    /// When the budget runs out; `None` until the probe has been observed.
+    /// The end of the budget. It is `None` until [`Plan::observe`] sees the
+    /// probe.
     deadline: Cell<Option<Instant>>,
 }
 
@@ -408,16 +419,16 @@ impl Plan {
         self.iters_per_sample.get()
     }
 
-    /// Whether the budget has run out. Always false before the probe, so the
-    /// probe itself is never cut short.
+    /// Whether the budget is spent. It is always false before the probe, so the
+    /// probe always runs to its end.
     fn spent(&self) -> bool {
         self.deadline
             .get()
             .is_some_and(|deadline| Instant::now() >= deadline)
     }
 
-    /// Plan the case from `per_iter` and start the budget's clock. The first call
-    /// — the probe's — is the one that counts; later ones are no-ops.
+    /// Plans the case from `per_iter`, and sets the deadline of the budget.
+    /// Only the first call, the call of the probe, has an effect.
     fn observe(&self, per_iter: Duration) {
         if self.deadline.get().is_some() {
             return;
@@ -448,15 +459,15 @@ impl Plan {
     }
 }
 
-/// Criterion's own sizing, pinned to the least it will do: [`MIN_SAMPLES`]
-/// samples of one iteration each, flat.
+/// Sets the sizing of criterion to its minimum: [`MIN_SAMPLES`] samples of one
+/// iteration each, flat.
 ///
-/// The budget decides how much a case really runs (see [`Plan`]), so
-/// `measurement_time` is deliberately too small to matter — criterion's "unable
-/// to complete N samples in 1.0ms" warning is expected, and the `bench-plan` line
-/// printed just before it is the real plan. `warm_up_time` is likewise the
-/// smallest value that still buys the one call the probe needs; criterion's own
-/// warm-up iterations would each be another whole model pass.
+/// The budget decides how much a case runs (see [`Plan`]). So
+/// `measurement_time` is too small to have an effect, on purpose. Criterion
+/// then warns "unable to complete N samples in 1.0ms", as expected. The
+/// `bench-plan` line before the warning is the real plan. `warm_up_time` is
+/// also the smallest value that still gives the one call of the probe. Each
+/// warm-up iteration of criterion is one more whole iteration.
 fn configure(group: &mut BenchmarkGroup<'_, WallTime>, tokens: u64) {
     group.throughput(Throughput::Elements(tokens));
     group.sample_size(samples());
@@ -469,22 +480,23 @@ fn configure(group: &mut BenchmarkGroup<'_, WallTime>, tokens: u64) {
 // Network and inputs
 // ---------------------------------------------------------------------------
 
-/// Builds `spec`'s network with random weights, in the shape a loaded checkpoint
-/// would have had — see the module header on why the head is tied here.
+/// Builds the network of `spec` with random weights, in the shape of a loaded
+/// checkpoint. The module header tells why the head is tied here.
 fn random_network(spec: &CheckpointSpec, device: &Device) -> MambaVocabNet {
     let mut mamba = (spec.topology)().init(device);
     tie_lm_head(&mut mamba, device);
     mamba
 }
 
-/// `count` token ids drawn from `spec`'s vocabulary.
+/// `count` token ids from the vocabulary of `spec`.
 ///
-/// Deterministic (a plain LCG, not `Tensor::random`) so every backend and every
-/// run feeds the network the same ids — a timing difference between two configs is
-/// then never a difference in inputs. Ids stay under `vocab_size`, since the
-/// padded tail of the embedding table is never a real token.
+/// The ids are deterministic (a plain LCG, not `Tensor::random`). So each
+/// backend and each run gives the same ids to the network. Then a timing
+/// difference between two bench configurations is never a difference in the
+/// input. The ids stay below `vocab_size`, because the padded tail of the
+/// embedding table is never a real token.
 fn token_ids(count: usize, spec: &CheckpointSpec) -> Vec<usize> {
-    // The checkpoint's *unpadded* vocabulary — the range a real token id lives in.
+    // The *unpadded* vocabulary of the checkpoint: the range of a real token id.
     let vocab = (spec.topology)().shape.vocab_size as u64;
     let mut state = 0x2545_F491_4F6C_DD1Du64;
     (0..count)
@@ -502,7 +514,7 @@ fn input_pairs(shape: Shape, spec: &CheckpointSpec, device: &Device) -> Tensor<3
     token_pairs(&token_ids(shape.batch * shape.sequence, spec), shape.batch, device)
 }
 
-/// Token pairs for one decode step, `[batch, 2]`.
+/// Token pairs for one step, `[batch, 2]`.
 fn input_pair(shape: Shape, spec: &CheckpointSpec, device: &Device) -> Tensor<2, Int> {
     token_pairs(&token_ids(shape.batch, spec), shape.batch, device).squeeze_dim(1)
 }
@@ -511,8 +523,8 @@ fn input_pair(shape: Shape, spec: &CheckpointSpec, device: &Device) -> Tensor<2,
 // Groups
 // ---------------------------------------------------------------------------
 
-/// One chunkwise pass over the whole token list, on the checkpoint's own SSD
-/// path — the call `MambaWrapper::run_parallel` makes once per generated token.
+/// One forward over the whole token list, on the SSD path of the checkpoint.
+/// `MambaWrapper::run_parallel` makes this call once for each generated token.
 fn bench_forward(
     c: &mut Criterion,
     spec: &'static CheckpointSpec,
@@ -527,14 +539,15 @@ fn bench_forward(
     let mut group = c.benchmark_group("forward");
     configure(&mut group, shape.tokens());
     group.bench_function(spec.id, |b| {
-        // Built on the first call criterion makes and kept for every later
-        // sample — it re-enters this closure once per sample, and the 187m nets
-        // are ~1.1GB of f32 parameters. Lazily, so a case the filter drops costs
-        // neither the build nor the warm-up.
+        // The first call of criterion builds the network, and each later
+        // sample keeps it. Criterion enters this closure again for each
+        // sample, and each 187m network holds about 1.1GB of f32 parameters.
+        // The build is lazy, so a case that the filter drops costs no build
+        // and no warm-up.
         let mamba = network.get_or_insert_with(|| random_network(spec, device));
         let x = input.get_or_insert_with(|| {
             let x = input_pairs(shape, spec, device);
-            // Untimed: compile (and autotune) the kernels this network needs.
+            // Untimed: compile and autotune the kernels of this network.
             for _ in 0..warmup_iters() {
                 let (_y, _caches) = mamba.forward(x.clone(), None, ssd_path.clone(), None, None);
                 sync(device);
@@ -552,9 +565,9 @@ fn bench_forward(
     group.finish();
 }
 
-/// One recurrent decode step, fed by the cache the previous iteration produced
-/// (so the recurrence really advances, as it does while generating) — the call
-/// `MambaWrapper::step` makes per token.
+/// One step, from the cache of the iteration before. So the recurrence
+/// advances, as in a generation. `MambaWrapper::step` makes this call for each
+/// token.
 fn bench_step(
     c: &mut Criterion,
     spec: &'static CheckpointSpec,
@@ -574,9 +587,9 @@ fn bench_step(
 
         if caches.is_none() {
             caches = Some(burn_mamba_example::empty_caches(shape.batch, mamba));
-            // Untimed: warm the decode kernels, advancing the cache as a real
-            // decode would (the steady state is what the measurements then see,
-            // and the cache keeps advancing across samples from here).
+            // Untimed: the warm-up of the kernels of the step. It advances the
+            // cache as a real decode does. The measurements then see the
+            // steady state, and the cache advances across the samples.
             for _ in 0..warmup_iters() {
                 let (_y, next) = mamba.step(x.clone(), caches.take(), None);
                 caches = Some(next);
@@ -595,15 +608,15 @@ fn bench_step(
     group.finish();
 }
 
-/// Both execution modes, over one set of weights per checkpoint.
+/// The two run modes, over one set of weights for each checkpoint.
 fn bench_checkpoints(c: &mut Criterion) {
     let shape = Shape::from_env();
     let device = device();
     shape.announce(&device);
 
     for spec in hf::CHECKPOINTS.iter().copied() {
-        // One network at a time: built by whichever group runs first and dropped
-        // before the next checkpoint's.
+        // One network at a time. The first group that runs builds it, and the
+        // loop drops it before the next checkpoint.
         let mut network = None;
         bench_forward(c, spec, shape, &device, &mut network);
         bench_step(c, spec, shape, &device, &mut network);

@@ -1,25 +1,48 @@
-//! Logits post-processing and token sampling over plain `[f32]` slices.
+//! The processing of the logits and the sampling of a token, over plain
+//! `[f32]` slices.
 //!
-//! Mirrors the behaviour of `candle_transformers::generation::LogitsProcessor` and
-//! `candle_transformers::utils::apply_repeat_penalty`, but without a tensor library:
-//! logits leave the Burn tensor as a `Vec<f32>` and are sampled here directly.
+//! It does what `candle_transformers::generation::LogitsProcessor` and
+//! `candle_transformers::utils::apply_repeat_penalty` do, with no tensor
+//! library (ADR-0001). The logits leave the Burn tensor as a `Vec<f32>`, and
+//! this module samples them.
 
 use rand::SeedableRng;
 use rand::distr::Distribution;
 
-/// How the next token is picked from the logits.
+/// How the sampler picks the next token from the logits.
 #[derive(Clone, PartialEq, Debug)]
 pub enum Sampling {
     /// Always take the highest logit.
     ArgMax,
-    /// Sample from the full (temperature-scaled) distribution.
-    All { temperature: f64 },
+    /// Sample from the full distribution.
+    All {
+        /// The divisor of the logits before the softmax.
+        temperature: f64,
+    },
     /// Sample among the `k` most likely tokens.
-    TopK { k: usize, temperature: f64 },
-    /// Nucleus sampling: smallest set of tokens whose probability exceeds `p`.
-    TopP { p: f64, temperature: f64 },
-    /// Top-k, then nucleus sampling within it.
-    TopKThenTopP { k: usize, p: f64, temperature: f64 },
+    TopK {
+        /// The count of the tokens to keep.
+        k: usize,
+        /// The divisor of the logits before the softmax.
+        temperature: f64,
+    },
+    /// Nucleus sampling: the smallest set of tokens whose probability exceeds
+    /// `p`.
+    TopP {
+        /// The probability mass to keep.
+        p: f64,
+        /// The divisor of the logits before the softmax.
+        temperature: f64,
+    },
+    /// Top-k, then nucleus sampling among the `k` tokens.
+    TopKThenTopP {
+        /// The count of the tokens to keep.
+        k: usize,
+        /// The probability mass to keep among the `k` tokens.
+        p: f64,
+        /// The divisor of the logits before the softmax.
+        temperature: f64,
+    },
 }
 
 /// Turns a logits vector into a token id.
@@ -35,7 +58,11 @@ impl LogitsProcessor {
         Self { rng, sampling }
     }
 
-    /// A missing (or ~zero) `temperature` means [Sampling::ArgMax].
+    /// Makes a processor with the random seed `seed`.
+    ///
+    /// A missing `temperature`, or one below 1e-7, gives [Sampling::ArgMax].
+    /// Else a `top_p` gives [Sampling::TopP], and no `top_p` gives
+    /// [Sampling::All].
     pub fn new(seed: u64, temperature: Option<f64>, top_p: Option<f64>) -> Self {
         let temperature = temperature.and_then(|v| if v < 1e-7 { None } else { Some(v) });
         let sampling = match temperature {
@@ -59,10 +86,11 @@ impl LogitsProcessor {
             Sampling::TopP { p, temperature } => {
                 let mut prs = softmax(logits, temperature);
                 if p <= 0.0 || p >= 1.0 {
-                    // simply sample from the predicted probability distribution
+                    // Sample from the whole distribution.
                     self.sample_multinomial(&prs)?
                 } else {
-                    // top-p (nucleus) sampling, clamping the least likely tokens to zero
+                    // Top-p (nucleus) sampling: set the least likely tokens to
+                    // zero.
                     self.sample_topp(&mut prs, p as f32)?
                 }
             }
@@ -83,15 +111,16 @@ impl LogitsProcessor {
         Ok(distr.sample(&mut self.rng) as u32)
     }
 
-    /// Top-p ("nucleus") sampling: zero out everything outside the smallest set of
-    /// tokens whose cumulated probability exceeds `top_p`, then sample.
+    /// Top-p ("nucleus") sampling. It sets to zero each probability outside the
+    /// smallest set of tokens whose sum of probabilities exceeds `top_p`. Then
+    /// it samples.
     fn sample_topp(&mut self, prs: &mut [f32], top_p: f32) -> anyhow::Result<u32> {
         let mut argsort_indices = (0..prs.len()).collect::<Vec<_>>();
 
         // Sort by descending probability.
         argsort_indices.sort_by(|&i, &j| prs[j].total_cmp(&prs[i]));
 
-        // Clamp smaller probabilities to zero.
+        // Set the smaller probabilities to zero.
         let mut cumsum = 0.;
         for index in &argsort_indices {
             if cumsum >= top_p {
@@ -117,7 +146,7 @@ impl LogitsProcessor {
         }
     }
 
-    /// Top-k, then top-p within the retained tokens.
+    /// Top-k, then top-p among the kept tokens.
     fn sample_topk_topp(
         &mut self,
         prs: &mut [f32],
@@ -170,8 +199,9 @@ fn softmax(logits: &[f32], temperature: f64) -> Vec<f32> {
     prs
 }
 
-/// Divides (or multiplies, for negative logits) the logits of every token already
-/// present in `context` by `penalty`, discouraging repetitions.
+/// Applies `penalty` to the logit of each token in `context`, so that a repeat
+/// is less likely. It divides a positive logit by `penalty`, and multiplies a
+/// negative logit by it.
 pub fn apply_repeat_penalty(logits: &mut [f32], penalty: f32, context: &[u32]) {
     let mut already_seen = std::collections::HashSet::new();
     for token_id in context {

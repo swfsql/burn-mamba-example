@@ -1,6 +1,8 @@
-//! Blocking hub client for native builds, caching into the standard
-//! `~/.cache/huggingface/hub` layout so files fetched by (or for) other tools are
-//! reused rather than fetched again:
+//! The blocking hub client of the native binary.
+//!
+//! Its hub cache has the standard layout of `~/.cache/huggingface/hub`. So the
+//! client uses the files that other HuggingFace tools fetched, and other tools
+//! use the files that it fetched:
 //!
 //! ```text
 //! <hub cache>/models--EleutherAI--gpt-neox-20b/
@@ -17,7 +19,8 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
-/// How much is read from the socket before touching the file / the log.
+/// The size of one read from the socket. After each read, the client writes
+/// the bytes to the file, and logs the progress at each 10%.
 const READ_BUFFER_LEN: usize = 8 * 1024 * 1024;
 
 /// A hub client bound to an endpoint and a hub cache directory.
@@ -27,14 +30,15 @@ pub struct Api {
     url_template: UrlTemplate,
     hub_cache_dir: PathBuf,
     agent: ureq::Agent,
-    /// Used for metadata: the `x-repo-commit` / `x-linked-etag` headers only
-    /// exist on the hub's own redirect response, not on the CDN's.
+    /// The agent of the metadata requests. Only the redirect response of the
+    /// hub has the `x-repo-commit` and `x-linked-etag` headers. The response of
+    /// the CDN does not have them.
     no_redirect_agent: ureq::Agent,
 }
 
 impl Api {
-    /// A client for `https://huggingface.co`, caching under `$HF_HOME/hub` (or
-    /// `~/.cache/huggingface/hub`).
+    /// A client for `https://huggingface.co`. Its hub cache is `$HF_HOME/hub`,
+    /// else `~/.cache/huggingface/hub`.
     pub fn new() -> Result<Self, HubError> {
         Ok(Self {
             endpoint: Endpoint::default(),
@@ -68,11 +72,13 @@ impl Api {
         self.repo(Repo::new(repo_id, RepoType::Model))
     }
 
-    /// Resolves a file's commit, etag and size without a fetch of the file.
+    /// Resolves the commit, the etag and the size of a file, with no fetch of
+    /// the file.
     ///
-    /// Relative redirects are followed by hand (the hub uses them to move between
-    /// its own hosts); the first absolute redirect — to the CDN — is where the
-    /// interesting headers live, so it is *not* followed.
+    /// The function follows each relative redirect. The hub uses them between
+    /// its own hosts. Then the hub sends an absolute redirect to the CDN. That
+    /// redirect response has the headers that the function reads, so the
+    /// function does *not* follow it.
     fn metadata(&self, url: &FileUrl) -> Result<Metadata, HubError> {
         let mut current = url.0.clone();
         let response = loop {
@@ -105,8 +111,9 @@ impl Api {
                 name: "etag",
                 url: current.clone(),
             })?;
-        // Absent when the hub is not the responder; only used to name the snapshot
-        // directory, so an empty value is survivable.
+        // The header is absent when the hub does not send the response. The
+        // client uses it only for the name of the snapshot directory, so an
+        // empty value is permitted.
         let commit_hash = response
             .header("x-repo-commit")
             .unwrap_or_default()
@@ -132,7 +139,8 @@ impl Api {
     }
 }
 
-/// A repository handle: builds URLs and fetches files out of one repo.
+/// A handle on one repository. It makes the URLs of its files, and fetches
+/// them.
 #[derive(Clone, Debug)]
 pub struct ApiRepo {
     api: Api,
@@ -140,7 +148,7 @@ pub struct ApiRepo {
 }
 
 impl ApiRepo {
-    /// The download URL of `filename` in this repo.
+    /// The URL of `filename` in this repo.
     pub fn url(&self, filename: &FilePath) -> FileUrl {
         self.api.url_template.url(
             &self.api.endpoint,
@@ -176,8 +184,8 @@ impl ApiRepo {
         Ok(blob)
     }
 
-    /// Streams `url` into `blob`, via a temporary file so an interrupted fetch
-    /// never leaves a truncated blob behind.
+    /// Writes the body of `url` into `blob`, through a temporary file. So an
+    /// interrupted fetch never leaves a truncated blob.
     fn fetch_to(&self, url: &FileUrl, blob: &Path, size: usize) -> Result<(), HubError> {
         let response = self
             .api
@@ -241,7 +249,8 @@ impl ApiRepo {
         self.repo_dir().join("blobs").join(&etag.0)
     }
 
-    /// The already-cached path for `filename`, if the revision was resolved before.
+    /// The path of `filename` in the hub cache. It is `None` when no earlier
+    /// call resolved the revision, or when the snapshot does not hold the file.
     fn cached_pointer(&self, filename: &FilePath) -> Option<PathBuf> {
         let commit = std::fs::read_to_string(self.ref_path()).ok()?;
         let pointer = self
@@ -260,8 +269,9 @@ impl ApiRepo {
         blob: &Path,
     ) -> Result<(), HubError> {
         if commit.0.is_empty() {
-            // Without a commit there is no snapshot directory to name; the blob
-            // path is still returned, it just cannot be found by revision later.
+            // Without a commit, the snapshot directory has no name. The caller
+            // still receives the blob path, but a later call cannot find the
+            // blob from the revision.
             return Ok(());
         }
 
@@ -296,7 +306,7 @@ fn default_hub_cache_dir() -> PathBuf {
 
 /// Resolves a same-host redirect target against the URL it came from.
 fn join_relative(base: &str, location: &str) -> String {
-    // `base` looks like "https://host/path…"; keep everything up to the host.
+    // `base` has the form "https://host/path…". Keep the part up to the host.
     match base
         .find("://")
         .and_then(|i| base[i + 3..].find('/').map(|j| i + 3 + j))

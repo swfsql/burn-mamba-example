@@ -1,14 +1,20 @@
+//! The browser console front-end. It has no page: it writes the text to the
+//! console log.
+
 use crate::hub::wasm::Api;
 use crate::hub::{FilePath, Repo, RepoId, RepoType, RevisionPath};
 use crate::tokenizer::Tokenizer;
 use crate::{CheckpointSpec, LogitsProcessorWrapper, MambaWrapper, WeightsSource, build_network, hf};
 use burn::prelude::*;
 
+/// Builds the run wrapper of the preferred checkpoint. Then it does a
+/// sequential run of the prompt "Mamba is the", and logs the text and the
+/// speed.
 pub async fn run() -> anyhow::Result<()> {
     let spec = hf::preferred()
         .ok_or_else(|| anyhow::anyhow!("no checkpoint feature is enabled in this build"))?;
     log::info!(
-        "running {} (id {:?}); compiled-in checkpoints, by priority: {:?}",
+        "running {} (id {:?}). The compiled-in checkpoints, by priority: {:?}",
         spec.display_name,
         spec.id,
         hf::ids()
@@ -24,26 +30,26 @@ pub async fn run() -> anyhow::Result<()> {
     let mut last_elapsed = timing.elapsed().as_millis();
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
 
-    // sequential run
+    // The sequential run.
     let mut i: usize = 0;
     {
         let (mut tokens, eos_token) = wrapper.reset_prompt(prompt)?;
 
-        // adds the first token to the output (as if it were an implicit output)
+        // No step gives the first token as an output, so add it here.
         if let Some(t) = tokens.first() {
             if let Some(t) = wrapper.tokenizer.next_token(*t as u32) {
                 output += &t;
             }
         }
 
-        // initial caches
         let mut caches = wrapper.empty_caches(1)?;
 
         while i < sample_len {
             let (next_logits, next_caches) = wrapper.step(tokens[i], Some(caches))?;
             caches = next_caches;
             if i == 0 {
-                // reset after the network generates the first token, for a better approximation
+                // Start the clock after the first step, for a better estimate
+                // of the speed.
                 timing = web_time::Instant::now();
             }
 
@@ -58,7 +64,7 @@ pub async fn run() -> anyhow::Result<()> {
                 break;
             }
 
-            // if the token has some valid representation, print it
+            // Add the new text, if the token completes some.
             if let Some(t) = wrapper.tokenizer.next_token(next_token as u32) {
                 output += &t;
             };
@@ -81,11 +87,12 @@ pub async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Fetches (or reuses the hub cache of) the tokenizer and the weights of the
-/// checkpoint, then builds the network.
+/// Loads the tokenizer file and the weights file of the checkpoint `spec` from
+/// the hub cache. It first fetches each missing download chunk. Then it builds
+/// the run wrapper.
 ///
-/// Takes the checkpoint to build, so a bundle carrying several can build any of
-/// them (see [hf::CHECKPOINTS]).
+/// A bundle with several checkpoints can build each of them (see
+/// [hf::CHECKPOINTS]).
 pub async fn build_wrapper(spec: &'static CheckpointSpec) -> anyhow::Result<MambaWrapper> {
     let api = Api::new().await?;
 
@@ -96,7 +103,7 @@ pub async fn build_wrapper(spec: &'static CheckpointSpec) -> anyhow::Result<Mamb
             .get_bytes(&FilePath(spec.file_path_tokenizer_json.into()))
             .await?;
         log::info!(
-            "tokenizer data loaded in {}ms",
+            "tokenizer file loaded in {}ms",
             timing.elapsed().as_millis()
         );
 
@@ -110,7 +117,7 @@ pub async fn build_wrapper(spec: &'static CheckpointSpec) -> anyhow::Result<Mamb
     {
         device
             .configure((crate::PRECISION_FLOAT_D_TYPE, crate::PRECISION_INT_D_TYPE))
-            .expect("Failed to install fp32/i32 device defaults");
+            .expect("failed to set the f32 and i32 defaults of the device");
     }
 
     let mamba = {
@@ -123,7 +130,7 @@ pub async fn build_wrapper(spec: &'static CheckpointSpec) -> anyhow::Result<Mamb
             ))
             .get_bytes(&FilePath(spec.file_path_model_safetensors.into()))
             .await?;
-        log::info!("mamba data loaded in {}ms", timing.elapsed().as_millis());
+        log::info!("weights file loaded in {}ms", timing.elapsed().as_millis());
 
         let timing = web_time::Instant::now();
         log::info!("building the network");

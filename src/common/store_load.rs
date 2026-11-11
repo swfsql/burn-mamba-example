@@ -1,19 +1,20 @@
-//! Loading the HF checkpoints into a [MambaVocabNet] through `burn-store`.
+//! The build of a [MambaVocabNet] from the weights file of a checkpoint,
+//! through `burn-store`.
 //!
 //! [build_network] makes the network from its topology, applies the store to
 //! it, then calls [tie_lm_head].
 //!
-//! The whole import is declarative. A [SafetensorsStore] gets a key remapping
+//! The whole import is declarative. A [SafetensorsStore] has a key remapping
 //! (`backbone.…` → the Burn module paths) and an adapter chain. The chain
 //! transposes `Linear` weights (PyTorch `[out, in]` → Burn `[in, out]`) and casts
 //! every float tensor to [crate::Precision]. With that cast, the f32, f16 and
 //! bf16 checkpoints share one code path (ADR-0003).
 //!
-//! The load is strict. Each parameter of the network must get a checkpoint
+//! The load is strict. Each parameter of the network must receive a checkpoint
 //! tensor, with one exception: [`ALLOWED_MISSING`], the parameters of the flag
 //! channel of the vocab network. No HF checkpoint holds them, so they keep
-//! their init values. A checkpoint tensor that reaches no parameter is only
-//! logged.
+//! their init values. The load only logs a checkpoint tensor that reaches no
+//! parameter.
 
 use burn::module::Param;
 use burn::prelude::*;
@@ -24,7 +25,7 @@ use burn_mamba::prelude::*;
 
 /// Where the bytes of the weights file of a checkpoint come from.
 pub enum WeightsSource {
-    /// A `model.safetensors` on disk; memory-mapped by the store.
+    /// A `model.safetensors` file on disk. The store maps it into memory.
     #[cfg(not(target_arch = "wasm32"))]
     File(std::path::PathBuf),
     /// Bytes that are already in memory (the browser has no filesystem).
@@ -52,8 +53,11 @@ const ALLOWED_MISSING: &[&str] = &[
     "flag_head.bias",
 ];
 
-/// Builds the network from `topology` and overwrites every parameter from the
-/// checkpoint, then ties the LM head to the (transposed) embedding.
+/// Builds the network from `topology`, writes each parameter from the
+/// checkpoint, then ties the LM head to the transposed embedding.
+///
+/// The parameters of the flag channel keep their init values. No checkpoint
+/// holds them.
 pub fn build_network(
     weights: WeightsSource,
     topology: MambaVocabNetConfig,
@@ -123,9 +127,10 @@ fn key_remapping(topology: &MambaVocabNetConfig) -> Vec<(&'static str, &'static 
         (r"^backbone\.layers\.(\d+)\.", "layers.real_layers.$1."),
         // backbone.X -> X
         (r"^backbone\.", ""),
-        // `norm_f`, the per-layer pre-norm, the Mamba-3 feed-forward's `norm2`
-        // and (Mamba-2) the mixer's gated norm all name their scale `gamma`,
-        // where the checkpoint says `weight`.
+        // The checkpoint names the scale of a norm `weight`, and the network
+        // names it `gamma`. This rule covers `norm_f`, the pre-norm of each
+        // layer, the `norm2` of the Mamba-3 feed-forward and the gated norm of
+        // the Mamba-2 block.
         (r"(^|\.)norm(_f|2)?\.weight$", "${1}norm${2}.gamma"),
     ];
 
@@ -143,19 +148,20 @@ fn key_remapping(topology: &MambaVocabNetConfig) -> Vec<(&'static str, &'static 
         }
         #[cfg(feature = "mamba3")]
         MambaBlockConfig::Mamba3(block) => {
-            // Mamba-3 has no `A_log`: A is data-dependent, projected out of
-            // `in_proj` rather than stored.
+            // Mamba-3 has no `A_log`. A comes from a projection of the token
+            // (`in_proj`), not from a parameter.
             rules.push((r"\.block\.D$", ".block.d_h"));
             rules.push((r"\.block\.dt_bias$", ".block.dt_bias_h"));
             rules.push((r"\.block\.B_bias$", ".block.b_bias_hmr"));
             rules.push((r"\.block\.C_bias$", ".block.c_bias_hmr"));
-            // The QK-norms are `B_norm`/`C_norm`, which the generic `norm.weight`
-            // rule above deliberately does not reach (it anchors on `.norm`).
+            // The norms of B and C are `B_norm` and `C_norm`. The `norm.weight`
+            // rule above does not match them: it needs `norm` at the start of
+            // the name or after a `.`.
             rules.push((r"\.block\.B_norm\.weight$", ".block.b_norm.gamma"));
             rules.push((r"\.block\.C_norm\.weight$", ".block.c_norm.gamma"));
-            // The MIMO projections exist only at `mimo_rank > 1`: the SISO
-            // checkpoint stores none and `Mamba3` holds `None` in their place,
-            // so the rules are conditioned on the same thing the tensors are.
+            // The MIMO projections exist only at `mimo_rank > 1`. The SISO
+            // checkpoint holds none of them, and `Mamba3` holds `None` in
+            // their place. So the rules have the condition of the tensors.
             if block.mimo_rank > 1 {
                 rules.push((r"\.block\.mimo_x$", ".block.mimo_x_hmp"));
                 rules.push((r"\.block\.mimo_z$", ".block.mimo_z_hmp"));
@@ -184,25 +190,24 @@ pub fn tie_lm_head(mamba: &mut MambaVocabNet, device: &Device) {
     });
 }
 
-/// Checks [`key_remapping`] against the real checkpoint manifests: nothing on
-/// either side of the load may be left dangling.
+/// Checks [`key_remapping`] against the manifests of the checkpoints. No tensor
+/// and no parameter of the load may stay without a match.
 ///
-/// A remapping bug is otherwise only discoverable by downloading ~1.1GB and
-/// watching the load fail, so every compiled-in checkpoint's `model.safetensors`
-/// header is vendored here — the model-level tensors plus the whole of layer 0,
-/// read from `refs/pr/1` of each repo. The tests push each name through the
-/// rules that the store uses. The result must be *exactly* the parameters of
-/// the built module minus [`ALLOWED_MISSING`], with the same shapes:
+/// Without these tests, a remapping bug shows only after a fetch of about
+/// 1.1GB, when the load fails. So this file holds the manifest of each
+/// checkpoint, from `refs/pr/1` of its repo. The tests push each name through
+/// the rules of the store. The result must be *exactly* the parameters of the
+/// built network minus [`ALLOWED_MISSING`], with the same shapes. So the tests
+/// find these gaps:
 ///
-/// - A checkpoint tensor that reaches no parameter: the load only logs it, so
+/// - A checkpoint tensor that reaches no parameter. The load only logs it, so
 ///   its values are lost.
-/// - A parameter outside [`ALLOWED_MISSING`] that no tensor fills: the loader
-///   fails, but only after the download.
-///
-/// [`remapping_rules_all_fire`] closes the third gap — a rule matching nothing,
-/// which is a rule that has stopped describing the checkpoint — and
-/// [`manifests_cover_the_whole_checkpoint`] the fourth: a manifest that is not
-/// the whole file.
+/// - A parameter outside [`ALLOWED_MISSING`] that no tensor fills. The load
+///   fails, but only after the fetch.
+/// - A rule that matches nothing ([`remapping_rules_all_fire`]). Such a rule
+///   does not describe the checkpoint.
+/// - A manifest that is not the whole file
+///   ([`manifests_cover_the_whole_checkpoint`]).
 #[cfg(all(test, any(feature = "mamba1", feature = "mamba2", feature = "mamba3")))]
 mod tests {
     use super::*;
@@ -211,15 +216,15 @@ mod tests {
     /// `(checkpoint tensor name, checkpoint shape)`.
     type Manifest = &'static [(&'static str, &'static [usize])];
 
-    /// One checkpoint's vendored `model.safetensors` header.
+    /// The vendored manifest of one checkpoint.
     struct Vendored {
-        /// The checkpoint it was read from.
+        /// The checkpoint of the manifest.
         spec: &'static crate::CheckpointSpec,
-        /// Everything outside `backbone.layers.`, plus the whole of layer 0.
-        /// Every layer repeats layer 0's names and shapes, which is what lets
-        /// one layer stand for all of them.
+        /// The tensors outside `backbone.layers.`, and the tensors of layer 0.
+        /// Each layer repeats the names and the shapes of layer 0, so layer 0
+        /// stands for each layer.
         manifest: Manifest,
-        /// How many times layer 0 repeats.
+        /// The count of the layers.
         n_layers: usize,
     }
 
@@ -293,8 +298,8 @@ mod tests {
         ("backbone.layers.0.mlp.fc2.weight", &[768, 1280]),
     ];
 
-    /// Every checkpoint of the families that this build compiles, whatever set
-    /// of family features that is.
+    /// Each checkpoint of the families of this build, whatever set of family
+    /// features the build has.
     const VENDORED: &[Vendored] = &[
         #[cfg(feature = "mamba1")]
         Vendored {
@@ -322,34 +327,34 @@ mod tests {
         },
     ];
 
-    /// The vocabulary the comparison module is built with. Small enough to keep
-    /// the test from allocating the real 130M/187M parameters, and a multiple of
-    /// every checkpoint's `pad_vocab_size_multiple`, so it survives the padding
-    /// unchanged.
+    /// The vocabulary size of the test network. It is small, so the test does
+    /// not allocate the 130M or 187M parameters of a checkpoint. It is a
+    /// multiple of each `pad_vocab_size_multiple`, so the padding does not
+    /// change it.
     const TEST_VOCAB: usize = 64;
 
     /// [`key_remapping`] applied to a manifest.
     struct Remapped {
-        /// `module path → shape`, as the store would see it.
+        /// `parameter path → shape`, as the store sees it.
         params: BTreeMap<String, Vec<usize>>,
         /// `(rule pattern, how many names it rewrote)`, in [`key_remapping`]
         /// order.
         rule_hits: Vec<(&'static str, usize)>,
     }
 
-    /// One layer and a token-sized vocabulary: the parameter *paths* depend on
-    /// neither, so the comparison runs on a network small enough to build.
+    /// One layer and a small vocabulary. The parameter *paths* do not depend on
+    /// them, so the test builds a small network.
     fn one_layer(mut topology: MambaVocabNetConfig) -> MambaVocabNetConfig {
         topology.shape.stack.n_real_layers = 1;
         topology.shape.vocab_size = TEST_VOCAB;
         topology
     }
 
-    /// The checkpoint names, pushed through [`key_remapping`] exactly as
-    /// `SafetensorsStore` applies it (every pattern, in order).
+    /// The checkpoint names, pushed through [`key_remapping`] as
+    /// `SafetensorsStore` applies it: each pattern, in order.
     ///
-    /// Two names remapping onto one parameter is a panic: the second would
-    /// overwrite the first, leaving whichever lost silently unloaded.
+    /// Two names that remap onto one parameter cause a panic. In a load, the
+    /// second tensor writes over the first, and the first has no effect.
     fn remapped(manifest: Manifest, topology: &MambaVocabNetConfig) -> Remapped {
         let rules = key_remapping(topology);
         let patterns = burn::store::KeyRemapper::from_patterns(rules.clone())
@@ -368,11 +373,12 @@ mod tests {
                     path = regex.replace_all(&path, replacement.as_str()).to_string();
                 }
             }
-            // `PyTorchToBurnAdapter` transposes `Linear` weights, and inside a
-            // layer a rank-2 `….weight` is exactly one: the norms are rank 1,
-            // `conv1d.weight` rank 3, and the bare `Param`s (`A_log`, `B_bias`,
-            // `mimo_*`) carry no `.weight` suffix. `embedding.weight` is the
-            // only rank-2 weight outside a layer, and is left alone.
+            // `PyTorchToBurnAdapter` transposes the `Linear` weights. Inside a
+            // layer, each rank-2 `….weight` is a `Linear` weight. The norms
+            // have rank 1, `conv1d.weight` has rank 3, and the bare `Param`s
+            // (`A_log`, `B_bias`, `mimo_*`) have no `.weight` suffix. Outside
+            // the layers, the only rank-2 weight is `embedding.weight`, and the
+            // adapter does not transpose it.
             let shape =
                 if shape.len() == 2 && name.ends_with(".weight") && name.contains(".layers.") {
                     vec![shape[1], shape[0]]
@@ -387,7 +393,7 @@ mod tests {
         Remapped { params, rule_hits }
     }
 
-    /// The parameters the built module actually exposes to the store.
+    /// The parameters that the built network shows to the store.
     fn module_params(topology: &MambaVocabNetConfig) -> BTreeMap<String, Vec<usize>> {
         let device: Device = Default::default();
         let network = topology.init(&device);
@@ -409,9 +415,9 @@ mod tests {
             let topology = one_layer(full.clone());
             let mut expected = remapped(vendored.manifest, &topology).params;
 
-            // The one shape the shrunken topology cannot be compared against
-            // directly — and the checkpoint's own row count is the check on
-            // `pad_vocab_size_multiple`, which differs between checkpoints.
+            // The test cannot compare this shape with the small topology. The
+            // row count of the checkpoint checks `pad_vocab_size_multiple`,
+            // which differs between checkpoints.
             let embedding = expected
                 .get_mut("embedding.weight")
                 .unwrap_or_else(|| panic!("{id}: the embedding must remap to `embedding.weight`"));
@@ -442,10 +448,10 @@ mod tests {
         }
     }
 
-    /// A rule that rewrites nothing is dead weight in [`key_remapping`] — or,
-    /// worse, a rename that silently stopped matching. This holds for every
-    /// checkpoint with no exception, which is why the MIMO rules are gated on
-    /// `mimo_rank` rather than on the Mamba-3 variant.
+    /// Each rule of [`key_remapping`] rewrites a name of each checkpoint. A rule
+    /// that rewrites nothing has no use, or it is a rename that does not match
+    /// the checkpoint. The test has no exception, so the condition of the MIMO
+    /// rules is `mimo_rank`, not only the Mamba-3 family.
     #[test]
     fn remapping_rules_all_fire() {
         for vendored in VENDORED {
@@ -464,15 +470,16 @@ mod tests {
         }
     }
 
-    /// Confirms each vendored manifest really is its whole checkpoint header:
-    /// the file must hold exactly the manifest's model-level tensors plus one
-    /// copy of layer 0 per layer, at the same shapes. Without this the offline
-    /// checks above only prove that the *transcribed* part of the checkpoint
-    /// loads.
+    /// Checks that each manifest covers the whole header of its weights file.
+    /// The file must hold exactly two sets of tensors, with the same shapes.
+    /// These are the tensors of the manifest outside the layers, and one copy
+    /// of layer 0 for each layer.
+    /// Without this test, the tests above show only that the *copied* part of
+    /// the checkpoint loads.
     ///
-    /// Ignored by default: it reads `model.safetensors` from the same
-    /// `~/.cache/huggingface` a native run uses, **downloading** the ~1.1GB of
-    /// checkpoints that are not already there.
+    /// The test is `#[ignore]`. It reads `model.safetensors` from the hub cache
+    /// of the native binary, and it **fetches** each missing weights file
+    /// (about 1.1GB in total).
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     #[ignore = "needs the real model.safetensors of every compiled-in checkpoint"]
@@ -492,8 +499,9 @@ mod tests {
                 .get(&FilePath(spec.file_path_model_safetensors.into()))
                 .unwrap_or_else(|e| panic!("{}: {e}", spec.id));
 
-            // safetensors: an 8-byte little-endian header length, then that many
-            // bytes of JSON — `name → {dtype, shape, data_offsets}`.
+            // A safetensors file starts with the header length (8 bytes,
+            // little-endian), then the JSON header:
+            // `name → {dtype, shape, data_offsets}`.
             let mut file = std::fs::File::open(&path).expect("the cached checkpoint");
             let mut length = [0u8; 8];
             file.read_exact(&mut length).expect("a header length");

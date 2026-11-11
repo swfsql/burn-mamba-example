@@ -1,9 +1,10 @@
-//! Browser hub client: `fetch` range requests, with each download chunk cached
-//! in IndexedDB.
+//! The hub client of the browser: `fetch` range requests, and a hub cache of
+//! download chunks in IndexedDB.
 //!
-//! A 500MB checkpoint is fetched as [DOWNLOAD_CHUNK_LEN]-sized ranges so the page
-//! can show progress, resume after a reload, and erase the file again. The hub
-//! cache of the browser has this layout:
+//! The client fetches a weights file of 500MB as ranges of
+//! [DOWNLOAD_CHUNK_LEN] bytes. So the page can show the progress, continue
+//! after a reload, and erase the file. The hub cache of the browser has this
+//! layout:
 //!
 //! ```text
 //! db "burn-mamba-example" v1
@@ -12,8 +13,8 @@
 //!     value  Uint8Array
 //! ```
 //!
-//! The offsets in a key are zero-padded to the width of the file size so that the
-//! lexicographic order IndexedDB uses for keys matches the numeric one.
+//! Each offset in a key has zeros in front, to the width of the file size. So
+//! the lexicographic order of the keys in IndexedDB is the numeric order.
 
 use super::{
     BlobHash, Endpoint, FilePath, FileUrl, HubError, Metadata, Repo, RepoId, RepoType,
@@ -30,7 +31,7 @@ use web_sys::{
     RequestInit, Response,
 };
 
-/// How much of a file is fetched (and cached) per request.
+/// The length of a download chunk: the bytes of one range request.
 pub const DOWNLOAD_CHUNK_LEN: usize = 10 * 1024 * 1024;
 
 const DB_NAME: &str = "burn-mamba-example";
@@ -38,7 +39,7 @@ const DB_VERSION: u32 = 1;
 const KEY_ROOT: &str = "huggingface/hub";
 const DOWNLOAD_CHUNK_STORE: &str = "download-chunks";
 
-/// One cached range of one blob.
+/// The key and the byte range of one download chunk of one blob.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DownloadChunkKey {
     /// The IndexedDB key.
@@ -59,7 +60,8 @@ impl DownloadChunkKey {
         }
     }
 
-    /// Parses back a key listed by IndexedDB; `None` if it is not one of ours.
+    /// Parses a key from IndexedDB. Returns `None` for a key of another
+    /// format.
     fn parse(key: String) -> Option<Self> {
         let (_prefix, offsets) = key.rsplit_once('/')?;
         let (start, end) = offsets.split_once('-')?;
@@ -73,16 +75,17 @@ impl DownloadChunkKey {
         self.end - self.start
     }
 
+    /// Whether this download chunk holds no byte.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
-/// The download chunks a file is made of: [Ok] when already cached, [Err] when
-/// still to fetch.
+/// The download chunks of a file, in order. An [Ok] entry is in the hub cache.
+/// An [Err] entry is not, so the client must fetch it.
 pub type DownloadChunkList = Vec<Result<DownloadChunkKey, DownloadChunkKey>>;
 
-/// A hub client holding the open IndexedDB connection.
+/// A hub client, with the open connection to IndexedDB.
 #[derive(Clone)]
 pub struct Api {
     endpoint: Endpoint,
@@ -92,7 +95,8 @@ pub struct Api {
 }
 
 impl Api {
-    /// Opens (and, on first use, creates) the hub cache database.
+    /// Opens the database of the hub cache. On the first use, it also creates
+    /// the database.
     pub async fn new() -> Result<Self, HubError> {
         let mut request = IdbDatabase::open_u32(DB_NAME, DB_VERSION)
             .map_err(|e| dom_err("opening the hub cache database", e))?;
@@ -132,12 +136,13 @@ impl Api {
         self.repo(Repo::new(repo_id, RepoType::Model))
     }
 
-    /// Resolves a file's etag and size, with a 1-byte range request.
+    /// Resolves the etag and the size of a file, with a range request of 1
+    /// byte.
     ///
-    /// `fetch` transparently follows the hub's redirect to its CDN and only
-    /// exposes the final response's headers, so `x-repo-commit` is usually lost
-    /// here — it is not needed, since the hub cache of the browser is keyed by
-    /// etag.
+    /// `fetch` follows the redirect of the hub to its CDN, and shows only the
+    /// headers of the last response. So the commit (`x-repo-commit`) is
+    /// usually absent here. The hub cache of the browser does not need it,
+    /// because its keys use the etag.
     pub async fn metadata(&self, url: &FileUrl) -> Result<Metadata, HubError> {
         log::info!("requesting metadata for {}", url.0);
         let response = fetch(&url.0, Some((0, 0))).await?;
@@ -166,7 +171,7 @@ impl Api {
         })
     }
 
-    /// Concatenates the cached download chunks back into the whole file.
+    /// Loads the cached download chunks, and joins them into the whole file.
     pub async fn load_bytes(
         &self,
         download_chunks: &[DownloadChunkKey],
@@ -253,8 +258,8 @@ impl Api {
         blob_prefix: &str,
         total_size: usize,
     ) -> Result<Vec<DownloadChunkKey>, HubError> {
-        // Two empty ranges — one at offset 0, one at the end — bracket every real
-        // download chunk key of this blob and nothing else.
+        // Two empty ranges, at the offset 0 and at the end, bound the keys of
+        // this blob. No key of another blob is between them.
         let first = DownloadChunkKey::new(blob_prefix, 0, 0, total_size);
         let last = DownloadChunkKey::new(blob_prefix, total_size, total_size, total_size);
         let range = IdbKeyRange::bound(
@@ -289,13 +294,14 @@ impl Api {
         Ok(keys
             .into_iter()
             .filter_map(|key| DownloadChunkKey::parse(key.as_string()?))
-            // A zero-length entry would stall the walk in `check`.
+            // An entry of length zero would stall the walk of `check`.
             .filter(|download_chunk| !download_chunk.is_empty())
             .collect())
     }
 }
 
-/// A repository handle: builds URLs, plans download chunks and fetches them.
+/// A handle on one repository. It makes the URLs of its files, plans their
+/// download chunks and fetches them.
 #[derive(Clone)]
 pub struct ApiRepo {
     api: Api,
@@ -303,7 +309,7 @@ pub struct ApiRepo {
 }
 
 impl ApiRepo {
-    /// The download URL of `filename` in this repo.
+    /// The URL of `filename` in this repo.
     pub fn url(&self, filename: &FilePath) -> FileUrl {
         self.api.url_template.url(
             &self.api.endpoint,
@@ -313,12 +319,12 @@ impl ApiRepo {
         )
     }
 
-    /// Plans the download chunk list for a file: which ranges are cached and
-    /// which are not.
+    /// Plans the download chunks of a file: the ranges in the hub cache, and
+    /// the ranges to fetch.
     ///
-    /// Cached download chunks are reused only when their start offset is exactly
-    /// where the walk currently is, so a hub cache written with a different
-    /// download chunk length still yields a valid (if partly redundant) plan.
+    /// The plan uses a cached download chunk only when it starts at the offset
+    /// of the walk. So a hub cache with another download chunk length still
+    /// gives a valid plan, but the plan can fetch some bytes again.
     pub async fn check(&self, metadata: &Metadata) -> Result<DownloadChunkList, HubError> {
         let blob_prefix = self.blob_prefix(&metadata.etag);
         let size = metadata.size;
@@ -328,8 +334,8 @@ impl ApiRepo {
         let mut cached_iter = cached.into_iter().peekable();
         let mut offset = 0;
         while offset < size {
-            // Drop cached download chunks starting before where we are (a leftover
-            // from a previous, differently-sized plan).
+            // Skip the cached download chunks that start before the offset.
+            // They come from a plan with another download chunk length.
             while cached_iter.peek().is_some_and(|c| c.start < offset) {
                 cached_iter.next();
             }
@@ -339,9 +345,8 @@ impl ApiRepo {
                 download_chunks.push(Ok(cached));
                 continue;
             }
-            // Stop the download chunk to fetch right where the next cached one
-            // begins; every remaining cached one now starts strictly after
-            // `offset`.
+            // End the download chunk to fetch where the next cached one starts.
+            // Each remaining cached download chunk starts after `offset`.
             let limit = cached_iter.peek().map_or(size, |c| c.start.min(size));
             let end = (offset + self.api.download_chunk_len).min(limit);
             download_chunks.push(Err(DownloadChunkKey::new(&blob_prefix, offset, end, size)));
@@ -351,9 +356,9 @@ impl ApiRepo {
         Ok(download_chunks)
     }
 
-    /// Fetches a whole file: plans its download chunks, fetches the missing ones
-    /// and concatenates everything. The intermediate progress is not observable,
-    /// so the browser page drives [Self::check] / [Self::fetch_download_chunk]
+    /// Returns a whole file. It plans the download chunks, fetches the missing
+    /// ones, and joins all of them. The caller cannot see the progress, so the
+    /// browser page calls [Self::check] and [Self::fetch_download_chunk]
     /// itself.
     pub async fn get_bytes(&self, filename: &FilePath) -> Result<Vec<u8>, HubError> {
         let url = self.url(filename);
@@ -374,7 +379,7 @@ impl ApiRepo {
         self.api.load_bytes(&keys).await
     }
 
-    /// Fetches one planned download chunk and stores it.
+    /// Fetches one download chunk of the plan, and puts it in the hub cache.
     pub async fn fetch_download_chunk(
         &self,
         url: &FileUrl,
@@ -409,7 +414,7 @@ impl ApiRepo {
     }
 }
 
-/// A GET, optionally restricted to an inclusive byte range.
+/// A GET request. With `range`, it asks only for that inclusive byte range.
 async fn fetch(url: &str, range: Option<(usize, usize)>) -> Result<Response, HubError> {
     let request_err = |e: JsValue| HubError::Request {
         url: url.to_string(),

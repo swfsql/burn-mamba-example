@@ -1,5 +1,6 @@
-//! A self-contained reader for HuggingFace `tokenizer.json` files, covering the
-//! two byte-level BPE pipelines this demo needs.
+//! A reader of HuggingFace `tokenizer.json` files. It covers the two byte-level
+//! BPE tokenizer pipelines that the app needs. The app does not use the
+//! `tokenizers` crate (ADR-0001).
 //!
 //! `EleutherAI/gpt-neox-20b` (the Mamba-1/Mamba-2 130m tokenizer):
 //!
@@ -11,12 +12,13 @@
 //!    → BPE model (ignore_merges) → Sequence[ByteLevel, TemplateProcessing]
 //!    → ByteLevel decoder`
 //!
-//! plus the `added_tokens` table in both cases. The two differ in more than
-//! configuration — see `byte_level::split_words_llama3` for the pre-tokenizer
-//! and `bpe::Bpe::tokenize` for `ignore_merges`.
+//! Both pipelines also have the `added_tokens` table. The two differ in more
+//! than the values of their components. See `byte_level::split_words_llama3`
+//! for the pre-tokenizer, and `bpe::Bpe::tokenize` for `ignore_merges`.
 //!
-//! This replaces the `tokenizers` crate. Anything the file asks for outside those
-//! pipelines is rejected at load time rather than silently ignored.
+//! When it parses the file, the reader rejects each component type and each
+//! component value outside these two pipelines. It ignores only the JSON
+//! fields that it does not read.
 
 mod bpe;
 mod byte_level;
@@ -31,15 +33,18 @@ use unicode_normalization::UnicodeNormalization;
 pub struct Tokenizer {
     vocab: HashMap<String, u32>,
     tokens: HashMap<u32, String>,
-    /// Added tokens, longest content first, so scanning yields the longest match.
+    /// The added tokens, longest content first. So a scan finds the longest
+    /// match.
     added: Vec<(String, u32)>,
-    /// First byte of every added token's content, to skip most scan positions.
+    /// The first byte of the content of each added token. The scan skips each
+    /// position that starts with another byte.
     added_first_bytes: [bool; 256],
     special_ids: HashSet<u32>,
     normalization: Normalization,
     pre_tokenization: PreTokenization,
-    /// Ids the post-processor prepends to every sequence (Llama-3's
-    /// `<|begin_of_text|>`; empty for gpt-neox). See [`Self::encode`].
+    /// The ids that the post-processor puts in front of each sequence:
+    /// `<|begin_of_text|>` for Llama-3, none for gpt-neox. See
+    /// [`Self::encode`].
     prefix_ids: Vec<u32>,
     bpe: Bpe,
 }
@@ -62,10 +67,10 @@ enum PreTokenization {
     Llama3,
 }
 
-/// The one `Split` pattern this crate implements, from
-/// `meta-llama/Llama-3.1-8B`. Compared verbatim: a pattern that differs by so
-/// much as a quantifier tokenizes differently, and silently accepting it would
-/// produce plausible-looking but wrong ids.
+/// The one `Split` pattern that this crate supports, from
+/// `meta-llama/Llama-3.1-8B`. The reader compares the pattern of the file with
+/// it, character by character. A pattern with one other quantifier splits the
+/// text differently, and gives ids that look correct but are wrong.
 const LLAMA3_SPLIT_PATTERN: &str = concat!(
     r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}",
     r"| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
@@ -100,9 +105,10 @@ impl Tokenizer {
 
         let pre_tokenization = parse_pre_tokenizer(json.pre_tokenizer.as_ref())?;
 
-        // As a *decoder* `ByteLevel` only maps the alphabet back to bytes — it
-        // reads neither `add_prefix_space` nor `use_regex` — so both are accepted
-        // here even though the pre-tokenizer stage is strict about them.
+        // As a *decoder*, `ByteLevel` only maps the alphabet back to bytes. It
+        // reads neither `add_prefix_space` nor `use_regex`. So the decoder
+        // accepts each value of the two fields, but the pre-tokenizer stage
+        // does not.
         match &json.decoder {
             Some(c) if c.kind == "ByteLevel" => {}
             other => anyhow::bail!("unsupported decoder: {:?}", other.as_ref().map(|c| &c.kind)),
@@ -146,8 +152,9 @@ impl Tokenizer {
         // Longest first: `find_added` then reports the longest match at a position.
         added.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
 
-        // Resolved only now: the post-processor names its special tokens by
-        // content, and they live in `added_tokens` rather than the base vocab.
+        // The reader resolves the prefix ids only now. The post-processor names
+        // its special tokens by their content, and they are in `added_tokens`,
+        // not in the base vocabulary.
         let prefix_ids = prefix_tokens
             .iter()
             .map(|token| {
@@ -202,12 +209,12 @@ impl Tokenizer {
         self.tokens.get(&id).map(|s| s.as_str())
     }
 
-    /// Encodes `text` into token ids, including whatever the post-processor
-    /// prepends (Llama-3's `<|begin_of_text|>`; nothing for gpt-neox).
+    /// Encodes `text` into token ids. The ids start with the prefix of the
+    /// post-processor: `<|begin_of_text|>` for Llama-3, none for gpt-neox.
     ///
-    /// The prefix is part of the encoding rather than an opt-in: the reference
-    /// `AutoTokenizer` applies the post-processor by default, so this is the
-    /// input distribution the checkpoints were trained and evaluated under.
+    /// The prefix is always part of the encoding. The reference
+    /// `AutoTokenizer` applies the post-processor by default. So the
+    /// checkpoints saw this input in their training and in their evaluation.
     pub fn encode(&self, text: &str) -> Vec<u32> {
         let text = self.normalize(text);
 
@@ -230,7 +237,8 @@ impl Tokenizer {
         ids
     }
 
-    /// Decodes token ids back into text, optionally dropping special tokens.
+    /// Decodes token ids into text. With `skip_special_tokens`, it drops the
+    /// special tokens.
     pub fn decode(&self, ids: &[u32], skip_special_tokens: bool) -> String {
         let tokens = ids
             .iter()
@@ -260,7 +268,7 @@ impl Tokenizer {
             .map(|(content, id)| (content.len(), *id))
     }
 
-    /// Pre-tokenizes then BPE-encodes a stretch of text holding no added token.
+    /// Pre-tokenizes, then BPE-encodes, a part of the text with no added token.
     fn encode_chunk(&self, text: &str, ids: &mut Vec<u32>) {
         let words = match self.pre_tokenization {
             PreTokenization::Gpt2 => byte_level::split_words(text),
@@ -273,11 +281,11 @@ impl Tokenizer {
     }
 }
 
-/// Identifies the pre-tokenizer as one of the two supported shapes.
+/// Finds which of the two supported pre-tokenizers the file declares.
 ///
-/// gpt-neox declares a lone `ByteLevel` that both splits and maps; Llama-3
-/// declares `Sequence[Split(Regex), ByteLevel(use_regex: false)]`, where only the
-/// `Split` splits and the `ByteLevel` maps.
+/// gpt-neox declares one `ByteLevel` that splits and maps. Llama-3 declares
+/// `Sequence[Split(Regex), ByteLevel(use_regex: false)]`: the `Split` splits,
+/// and the `ByteLevel` only maps.
 fn parse_pre_tokenizer(component: Option<&ComponentJson>) -> anyhow::Result<PreTokenization> {
     let Some(c) = component else {
         anyhow::bail!("unsupported pre_tokenizer: none");
@@ -320,13 +328,14 @@ fn parse_pre_tokenizer(component: Option<&ComponentJson>) -> anyhow::Result<PreT
             if pattern != LLAMA3_SPLIT_PATTERN {
                 anyhow::bail!("unsupported Split pattern: {pattern:?}");
             }
-            // This ByteLevel only maps bytes; splitting already happened.
+            // This ByteLevel only maps bytes. The Split before it splits the
+            // text.
             if byte_level.add_prefix_space {
                 anyhow::bail!("unsupported ByteLevel pre_tokenizer with add_prefix_space");
             }
             if byte_level.use_regex {
                 anyhow::bail!(
-                    "a Split pre_tokenizer must be followed by ByteLevel use_regex: false"
+                    "the ByteLevel after a Split pre_tokenizer must have use_regex: false"
                 );
             }
             Ok(PreTokenization::Llama3)
@@ -335,13 +344,14 @@ fn parse_pre_tokenizer(component: Option<&ComponentJson>) -> anyhow::Result<PreT
     }
 }
 
-/// The special tokens the post-processor prepends to a single sequence.
+/// The special tokens that the post-processor puts in front of a single
+/// sequence.
 ///
-/// `ByteLevel` here only trims offsets, which this crate never reads, and
-/// contributes no tokens. `TemplateProcessing` may prepend specials (Llama-3's
-/// `<|begin_of_text|>`); anything it would *append*, or any template that does
-/// not start with the sequence placeholder after its prefix, is rejected rather
-/// than half-applied.
+/// Here `ByteLevel` only trims offsets, and this crate never reads offsets. So
+/// it adds no token. `TemplateProcessing` can put special tokens in front, as
+/// the `<|begin_of_text|>` of Llama-3. The function rejects a template that
+/// adds a token *after* the sequence, or a template with no sequence
+/// placeholder. It does not apply such a template in part.
 fn parse_post_processor(component: Option<&ComponentJson>) -> anyhow::Result<Vec<String>> {
     let Some(c) = component else {
         return Ok(Vec::new());
@@ -403,8 +413,9 @@ struct AddedTokenJson {
     special: bool,
 }
 
-/// The shared shape of the `normalizer` / `pre_tokenizer` / `post_processor` /
-/// `decoder` entries; only the fields this pipeline cares about are read.
+/// The shared shape of the `normalizer`, `pre_tokenizer`, `post_processor` and
+/// `decoder` entries. The reader reads only the fields that the supported
+/// pipelines use.
 #[derive(Debug, Deserialize)]
 struct ComponentJson {
     #[serde(rename = "type")]
@@ -422,10 +433,10 @@ struct ComponentJson {
     /// `Split` only.
     #[serde(default)]
     pattern: Option<PatternJson>,
-    /// `Split` only — how the match itself is treated relative to the pieces.
+    /// `Split` only: where the match goes, relative to the pieces.
     #[serde(default)]
     behavior: Option<String>,
-    /// `Split` only — match the complement of the pattern.
+    /// `Split` only: match the complement of the pattern.
     #[serde(default)]
     invert: bool,
     /// `TemplateProcessing` only: the single-sequence template.
@@ -433,8 +444,8 @@ struct ComponentJson {
     single: Vec<TemplatePieceJson>,
 }
 
-/// A `Split` pattern. Only the `Regex` form is understood (`String` would be a
-/// literal delimiter, which neither supported tokenizer uses).
+/// A `Split` pattern. The reader supports only the `Regex` form. The `String`
+/// form is a literal delimiter, and no supported tokenizer uses it.
 #[derive(Debug, Deserialize)]
 struct PatternJson {
     #[serde(rename = "Regex")]
@@ -442,8 +453,9 @@ struct PatternJson {
     regex: Option<String>,
 }
 
-/// One entry of a `TemplateProcessing` template. The placeholder's own `id`
-/// ("A"/"B") only matters for pair templates, which are rejected upstream.
+/// One entry of a `TemplateProcessing` template. The `id` of the placeholder
+/// ("A" or "B") matters only in a pair template. The reader reads only the
+/// single-sequence template.
 #[derive(Debug, Deserialize)]
 enum TemplatePieceJson {
     SpecialToken { id: String },
@@ -462,8 +474,8 @@ struct ModelJson {
     end_of_word_suffix: Option<String>,
     #[serde(default)]
     byte_fallback: bool,
-    /// Emit a pre-tokenized word that is itself a vocabulary entry as that id,
-    /// bypassing the merge table (set by Llama-3).
+    /// Give a pre-tokenized word that is a vocabulary entry as its id, with no
+    /// merge. Llama-3 sets it.
     #[serde(default)]
     ignore_merges: bool,
     vocab: HashMap<String, u32>,
@@ -493,12 +505,12 @@ fn default_true() -> bool {
     true
 }
 
-/// Whole-pipeline parity against the reference `tokenizers` crate.
+/// The parity of the whole pipeline with the reference `tokenizers` crate.
 ///
-/// The unit tests above pin the pieces; this pins the composition on a real
-/// `tokenizer.json`, which is too large to vendor. Point `TOKENIZER_JSON` at one
-/// and the expectations in `TOKENIZER_IDS` (a JSON object of `text -> ids`
-/// produced by `tokenizers`) are replayed:
+/// The unit tests of `bpe` and `byte_level` check the parts. This test checks
+/// the whole pipeline on a real `tokenizer.json`, which is too large to
+/// vendor. Set `TOKENIZER_JSON` to the path of one. Set `TOKENIZER_IDS` to a
+/// JSON object of `text -> ids` from `tokenizers`. Then run the test:
 ///
 /// ```sh
 /// TOKENIZER_JSON=… TOKENIZER_IDS=… cargo test --no-default-features -- --ignored
@@ -525,7 +537,8 @@ mod parity_tests {
                 eprintln!("{text:?}\n  want {want:?}\n  got  {got:?}");
                 failures += 1;
             }
-            // Round-tripping must also recover the text (specials dropped).
+            // The decode of the ids must give the text again, with no special
+            // token.
             let back = tokenizer.decode(&got, true);
             if &back != text {
                 eprintln!("{text:?} decoded back to {back:?}");

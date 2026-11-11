@@ -1,11 +1,12 @@
-//! A minimal HuggingFace hub client, replacing the `hf-hub` fork this demo used
-//! to depend on.
+//! A small client of the HuggingFace hub. The app does not use the `hf-hub`
+//! crate (ADR-0001).
 //!
-//! Only what the demo needs is implemented: resolve a file's metadata (commit,
-//! etag, size) and get its bytes, with a hub cache on disk natively (`sync`)
-//! and a hub cache of download chunks in IndexedDB in the browser (`wasm`).
+//! The client does only what the app needs. It resolves the metadata of a file
+//! (commit, etag, size), and it gets the bytes of the file. Natively, `sync`
+//! keeps the hub cache on disk. In the browser, `wasm` keeps the hub cache in
+//! IndexedDB, as download chunks.
 //!
-//! Both hub clients share the naming below.
+//! The two hub clients share the types below.
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod sync;
@@ -14,17 +15,41 @@ pub mod wasm;
 
 use std::fmt;
 
-/// Everything that can go wrong while talking to the hub or to the hub cache.
+/// An error of a request to the hub, or of an access to the hub cache.
 #[derive(Debug)]
 pub enum HubError {
-    /// The request itself failed (transport, DNS, CORS, non-success status…).
-    Request { url: String, message: String },
-    /// A response header the hub is expected to send was missing or unusable.
-    Header { name: &'static str, url: String },
-    /// The hub cache (filesystem or IndexedDB) could not be read or written.
-    HubCache { context: String, message: String },
-    /// A range request returned a different number of bytes than asked for.
-    ShortRead { expected: usize, got: usize },
+    /// The request failed (transport, DNS, CORS, a status that is not a
+    /// success…).
+    Request {
+        /// The URL of the request.
+        url: String,
+        /// The error text of the transport, or the status.
+        message: String,
+    },
+    /// The response has no header with this name, or its value is not usable.
+    Header {
+        /// The name of the header.
+        name: &'static str,
+        /// The URL of the request.
+        url: String,
+    },
+    /// A read or a write of the hub cache (the filesystem or IndexedDB)
+    /// failed.
+    HubCache {
+        /// The target of the access: a path, an IndexedDB key, or a short
+        /// description of the operation.
+        context: String,
+        /// The error text of the filesystem or of IndexedDB.
+        message: String,
+    },
+    /// A response gave a different number of bytes than the request asked
+    /// for.
+    ShortRead {
+        /// The number of bytes that the request asked for.
+        expected: usize,
+        /// The number of bytes in the response.
+        got: usize,
+    },
 }
 
 impl fmt::Display for HubError {
@@ -60,11 +85,14 @@ impl Default for Endpoint {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RepoId(pub String);
 
-/// What kind of repository is being addressed.
+/// The kind of a repository of the hub.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RepoType {
+    /// A repository of the hub type "model". Each checkpoint is in one.
     Model,
+    /// A repository of the hub type "dataset".
     Dataset,
+    /// A repository of the hub type "space".
     Space,
 }
 
@@ -108,15 +136,18 @@ pub struct FilePath(pub String);
 #[derive(Clone, Debug, PartialEq)]
 pub struct BlobHash(pub String);
 
-/// A fully-resolved download URL.
+/// The URL of one file of the hub, at one revision.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FileUrl(pub String);
 
 /// A repository at a given revision.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Repo {
+    /// The name of the repository.
     pub repo_id: RepoId,
+    /// The kind of the repository.
     pub repo_type: RepoType,
+    /// The branch, tag or ref.
     pub revision: RevisionPath,
 }
 
@@ -126,6 +157,7 @@ impl Repo {
         Self::with_revision(repo_id, repo_type, RevisionPath::default())
     }
 
+    /// At the branch, tag or ref `revision`.
     pub fn with_revision(repo_id: RepoId, repo_type: RepoType, revision: RevisionPath) -> Self {
         Self {
             repo_id,
@@ -142,13 +174,15 @@ impl Repo {
         }
     }
 
-    /// The cache directory name. Eg. `"models--EleutherAI--gpt-neox-20b"`.
+    /// The directory name of the repo in the hub cache. Eg.
+    /// `"models--EleutherAI--gpt-neox-20b"`.
     pub fn folder_name(&self) -> String {
         format!("{}--{}", self.repo_type.prefix(), self.repo_id.0).replace('/', "--")
     }
 }
 
-/// How a [FileUrl] is built out of an [Endpoint], a [Repo] and a [FilePath].
+/// The pattern that makes a [FileUrl] from an [Endpoint], a [Repo] and a
+/// [FilePath].
 #[derive(Clone, Debug, PartialEq)]
 pub struct UrlTemplate(pub String);
 
@@ -160,6 +194,7 @@ impl Default for UrlTemplate {
 }
 
 impl UrlTemplate {
+    /// The URL of `filename` in `repo` at `revision`.
     pub fn url(
         &self,
         endpoint: &Endpoint,
@@ -177,14 +212,15 @@ impl UrlTemplate {
     }
 }
 
-/// What the hub reports about a file before it is downloaded.
+/// The data that the hub gives about a file before a fetch.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Metadata {
-    /// The commit the revision currently resolves to. May be empty in the
-    /// browser, where the redirect that carries `x-repo-commit` is not visible
-    /// to `fetch`.
+    /// The commit of the revision at the time of the request. It can be empty
+    /// in the browser, because `fetch` does not show the redirect that has the
+    /// `x-repo-commit` header.
     pub commit_hash: RevisionHash,
-    /// The blob's content hash, used as its cache key.
+    /// The content hash of the blob. It is the key of the blob in the hub
+    /// cache.
     pub etag: BlobHash,
     /// The file size, in bytes.
     pub size: usize,
@@ -195,7 +231,8 @@ fn size_from_content_range(value: &str) -> Option<usize> {
     value.rsplit('/').next()?.trim().parse().ok()
 }
 
-/// The hub quotes etags; the quotes are not part of the hash.
+/// Removes the quotes that the hub puts around an etag. They are not part of
+/// the hash.
 fn clean_etag(value: &str) -> String {
     value.replace('"', "")
 }

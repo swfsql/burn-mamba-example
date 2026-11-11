@@ -29,40 +29,45 @@ use tokenizer::Tokenizer;
 use burn_mamba::prelude::*;
 use sampling::LogitsProcessor;
 
+/// The Rust type of a float of the network: f32. It agrees with
+/// [PRECISION_FLOAT_D_TYPE] (ADR-0003).
 #[allow(unused_imports)]
 pub type Precision = f32;
 use burn::tensor::{FloatDType, IntDType};
+/// The float dtype of the device and of the loaded weights: f32 (ADR-0003).
 pub const PRECISION_FLOAT_D_TYPE: FloatDType = FloatDType::F32;
+/// The int dtype of the device: i32 (ADR-0003).
 pub const PRECISION_INT_D_TYPE: IntDType = IntDType::I32;
 
-/// One compiled-in checkpoint: everything an entry point needs to fetch its
-/// files, build its network and label it, as plain data.
+/// One compiled-in checkpoint, as plain data: the values that an entry point
+/// needs to fetch its files, build its network and show its name.
 ///
-/// Any number of checkpoint features may be enabled at once; [hf::CHECKPOINTS]
-/// is the resulting runtime list (highest priority first) and [hf::preferred]
-/// is what an entry point that runs a single checkpoint picks.
+/// A build can have any set of checkpoint features. The list
+/// [hf::CHECKPOINTS] holds the checkpoints of the build, highest priority
+/// first. The function [hf::preferred] gives its first entry.
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 #[derive(Clone, Copy, Debug)]
 pub struct CheckpointSpec {
     /// The checkpoint id. It is also the checkpoint feature, the `frontend/`
     /// directory, the `MAMBA_CHECKPOINT` value and the bench case name.
     pub id: &'static str,
-    /// Human-readable name, for logs and the browser UI's asset card.
+    /// The name for the logs and for the asset card of the browser page.
     pub display_name: &'static str,
-    /// A [hub::RepoId].
+    /// The hub repo of the weights file, as a [hub::RepoId].
     pub repo_id: &'static str,
-    /// A [hub::RevisionPath].
+    /// The revision of the weights file, as a [hub::RevisionPath].
     pub revision_path: &'static str,
-    /// A [hub::FilePath].
+    /// The weights file in its repo, as a [hub::FilePath].
     pub file_path_model_safetensors: &'static str,
-    /// A [hub::RepoId], of the repo this checkpoint's tokenizer comes from.
+    /// The hub repo of the tokenizer file, as a [hub::RepoId].
     pub tokenizer_repo_id: &'static str,
-    /// A [hub::FilePath].
+    /// The tokenizer file in its repo, as a [hub::FilePath].
     pub file_path_tokenizer_json: &'static str,
-    /// The hardcoded topology, mirroring the checkpoint's `config.json`.
+    /// The hardcoded topology. It copies the `config.json` of the checkpoint
+    /// (ADR-0002).
     pub topology: fn() -> MambaVocabNetConfig,
-    /// The scan the parallel path takes, including the chunk length the
-    /// checkpoint was trained with.
+    /// The scan that a forward uses. For a Mamba-3 checkpoint, it holds the
+    /// chunk length of the training of the checkpoint.
     pub ssd_path: fn() -> MambaSsdPath,
 }
 
@@ -125,11 +130,11 @@ pub mod hf {
         &mamba1_130m::SPEC,
     ];
 
-    /// The checkpoint to use when exactly one checkpoint should run: the
-    /// highest-priority entry of [CHECKPOINTS].
+    /// The first entry of [CHECKPOINTS]: the checkpoint with the highest
+    /// priority.
     ///
-    /// [None] only for a build with no checkpoint feature — a family feature on
-    /// its own enables the blocks but no checkpoint.
+    /// It is [None] only in a build with no checkpoint feature. A family feature
+    /// alone adds the blocks, but no checkpoint.
     #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
     pub fn preferred() -> Option<&'static CheckpointSpec> {
         CHECKPOINTS.first().copied()
@@ -195,10 +200,10 @@ pub mod hf {
 
     /// The tokenizer of the Mamba-3 187m checkpoints (`vocab_size: 128256`).
     ///
-    /// Their model cards name `meta-llama/Llama-3.1-8B`, whose repo is gated —
-    /// the hub client sends no credentials, and the deployed wasm page has none
-    /// to send. This is an ungated mirror carrying the same `tokenizer.json`
-    /// pipeline and the same 128256 ids.
+    /// Their model cards name `meta-llama/Llama-3.1-8B`. That repo is gated: it
+    /// needs credentials. The hub client sends none, and the browser page has
+    /// none to send. This repo is an ungated mirror, with the same
+    /// `tokenizer.json` pipeline and the same 128256 ids.
     #[cfg(feature = "mamba3")]
     pub mod tokenizer_llama31 {
         #[allow(unused_imports)]
@@ -210,6 +215,7 @@ pub mod hf {
         pub const FILE_PATH_TOKENIZER_JSON: &str = "tokenizer.json";
     }
 
+    /// The `state-spaces/mamba-130m` checkpoint, of the Mamba-1 family.
     #[cfg(feature = "mamba1")]
     pub mod mamba1_130m {
         #[allow(unused_imports)]
@@ -217,8 +223,8 @@ pub mod hf {
         use burn_mamba::mamba1;
         use burn_mamba::prelude::*;
 
-        /// This checkpoint's entry in [super::CHECKPOINTS] — only listed there
-        /// under its own checkpoint feature, `mamba1-130m`.
+        /// The spec of this checkpoint. [super::CHECKPOINTS] lists it only with
+        /// its checkpoint feature, `mamba1-130m`.
         pub const SPEC: crate::CheckpointSpec = crate::CheckpointSpec {
             id: "mamba1-130m",
             display_name: DISPLAY_NAME,
@@ -235,24 +241,30 @@ pub mod hf {
         pub const REPO_ID: &str = "state-spaces/mamba-130m";
         /// A [RevisionPath].
         ///
-        /// Safetensor PR conversion made by a bot.
+        /// The pull request where a bot converted the weights to safetensors.
         pub const REVISION_PATH: &str = "refs/pr/1";
         /// A [FilePath].
         pub const FILE_PATH_CONFIG_JSON: &str = "config.json";
         /// A [FilePath].
         pub const FILE_PATH_MODEL_SAFETENSORS: &str = "model.safetensors";
 
-        /// Where this checkpoint's `tokenizer.json` comes from.
+        /// The source of the `tokenizer.json` of this checkpoint.
         pub use super::tokenizer as tokenizer_source;
 
-        /// Shown on the browser UI's asset card.
+        /// The name on the asset card of the browser page.
         pub const DISPLAY_NAME: &str = "Mamba-130m";
 
+        /// `vocab_size` in `config.json`.
         pub const VOCAB_SIZE: usize = 50277;
+        /// `pad_vocab_size_multiple` in `config.json`.
         pub const PAD_VOCAB_SIZE_MULTIPLE: usize = 8;
+        /// `n_layer` in `config.json`.
         pub const N_LAYER: usize = 24;
+        /// `d_model` in `config.json`.
         pub const D_MODEL: usize = 768;
 
+        /// The topology of this checkpoint. A comment beside each value names
+        /// its source.
         pub fn topology() -> MambaVocabNetConfig {
             MambaVocabNetConfig {
                 shape: VocabShape {
@@ -284,11 +296,13 @@ pub mod hf {
             }
         }
 
+        /// The scan of a forward. Mamba-1 has no SSD, so it has no SSD path.
         pub fn ssd_path() -> MambaSsdPath {
             MambaSsdPath::Mamba1
         }
     }
 
+    /// The `state-spaces/mamba2-130m` checkpoint, of the Mamba-2 family.
     #[cfg(feature = "mamba2")]
     pub mod mamba2_130m {
         #[allow(unused_imports)]
@@ -296,8 +310,8 @@ pub mod hf {
         use burn_mamba::mamba2;
         use burn_mamba::prelude::*;
 
-        /// This checkpoint's entry in [super::CHECKPOINTS] — only listed there
-        /// under its own checkpoint feature, `mamba2-130m`.
+        /// The spec of this checkpoint. [super::CHECKPOINTS] lists it only with
+        /// its checkpoint feature, `mamba2-130m`.
         pub const SPEC: crate::CheckpointSpec = crate::CheckpointSpec {
             id: "mamba2-130m",
             display_name: DISPLAY_NAME,
@@ -314,24 +328,30 @@ pub mod hf {
         pub const REPO_ID: &str = "state-spaces/mamba2-130m";
         /// A [RevisionPath].
         ///
-        /// Safetensor PR conversion made by a bot.
+        /// The pull request where a bot converted the weights to safetensors.
         pub const REVISION_PATH: &str = "refs/pr/1";
         /// A [FilePath].
         pub const FILE_PATH_CONFIG_JSON: &str = "config.json";
         /// A [FilePath].
         pub const FILE_PATH_MODEL_SAFETENSORS: &str = "model.safetensors";
 
-        /// Where this checkpoint's `tokenizer.json` comes from.
+        /// The source of the `tokenizer.json` of this checkpoint.
         pub use super::tokenizer as tokenizer_source;
 
-        /// Shown on the browser UI's asset card.
+        /// The name on the asset card of the browser page.
         pub const DISPLAY_NAME: &str = "Mamba2-130m";
 
+        /// `vocab_size` in `config.json`.
         pub const VOCAB_SIZE: usize = 50277;
+        /// `pad_vocab_size_multiple` in `config.json`.
         pub const PAD_VOCAB_SIZE_MULTIPLE: usize = 16;
+        /// `n_layer` in `config.json`.
         pub const N_LAYER: usize = 24;
+        /// `d_model` in `config.json`.
         pub const D_MODEL: usize = 768;
 
+        /// The topology of this checkpoint. A comment beside each value names
+        /// its source.
         pub fn topology() -> MambaVocabNetConfig {
             MambaVocabNetConfig {
                 shape: VocabShape {
@@ -364,18 +384,22 @@ pub mod hf {
             }
         }
 
+        /// The scan of a forward: the `SerialRecalculated` SSD path. With
+        /// `None`, burn-mamba uses its optimal chunk length for the
+        /// dimensions of the block.
         pub fn ssd_path() -> MambaSsdPath {
             MambaSsdPath::Mamba2(Mamba2SsdPath::SerialRecalculated(None))
         }
     }
 
-    /// Shared shape of the two official Mamba-3 187m checkpoints.
+    /// Writes the module of one of the two official Mamba-3 187m checkpoints.
     ///
-    /// Both are 12 layers of `Mamba3` mixer + SwiGLU MLP over the Llama-3.1
-    /// vocabulary, and differ only in `mimo_rank`, `d_intermediate` and the
-    /// chunk length (`chunk_size` in `config.json`). The fields below mirror their `config.json`;
-    /// `is_outproj_norm: false` and `attn_layer_idx: []` in both, so there is no
-    /// `out_norm` and no attention layer to model.
+    /// Each checkpoint has 12 layers of a `Mamba3` block and a SwiGLU
+    /// feed-forward, over the Llama-3.1 vocabulary. The two differ only in
+    /// `mimo_rank`, `d_intermediate` and the chunk length (`chunk_size` in
+    /// `config.json`). The values below copy their `config.json`. Both have
+    /// `is_outproj_norm: false` and `attn_layer_idx: []`, so the topology has
+    /// no `out_norm` and no attention layer.
     #[cfg(feature = "mamba3")]
     macro_rules! mamba3_187m {
         (
@@ -387,15 +411,18 @@ pub mod hf {
             mimo_rank = $mimo_rank:expr,
             chunk_len = $chunk_len:expr,
         ) => {
+            #[doc = concat!("The `", $repo, "` checkpoint, of the Mamba-3 family.")]
             pub mod $module {
                 #[allow(unused_imports)]
                 use crate::hub::{FilePath, RepoId, RevisionPath};
                 use burn_mamba::mamba3;
                 use burn_mamba::prelude::*;
 
-                /// This checkpoint's entry in [super::CHECKPOINTS] — only
-                /// listed there under its own checkpoint feature, since
-                /// `mamba3` alone picks neither.
+                #[doc = concat!(
+                    "The spec of this checkpoint. [super::CHECKPOINTS] lists it only with ",
+                    "its checkpoint feature, `", $id, "`. The family feature `mamba3` alone ",
+                    "adds no checkpoint."
+                )]
                 pub const SPEC: crate::CheckpointSpec = crate::CheckpointSpec {
                     id: $id,
                     display_name: DISPLAY_NAME,
@@ -412,31 +439,41 @@ pub mod hf {
                 pub const REPO_ID: &str = $repo;
                 /// A [RevisionPath].
                 ///
-                /// Safetensor PR conversion made by a bot — `main` carries only
-                /// `pytorch_model.bin`, which `burn-store` cannot read.
+                /// The pull request where a bot converted the weights to
+                /// safetensors. `main` holds only `pytorch_model.bin`, and
+                /// `burn-store` cannot read that file.
                 pub const REVISION_PATH: &str = "refs/pr/1";
                 /// A [FilePath].
                 pub const FILE_PATH_CONFIG_JSON: &str = "config.json";
                 /// A [FilePath].
                 pub const FILE_PATH_MODEL_SAFETENSORS: &str = "model.safetensors";
 
-                /// Where this checkpoint's `tokenizer.json` comes from.
+                /// The source of the `tokenizer.json` of this checkpoint.
                 pub use super::tokenizer_llama31 as tokenizer_source;
 
-                /// Shown on the browser UI's asset card.
+                /// The name on the asset card of the browser page.
                 pub const DISPLAY_NAME: &str = $display_name;
 
+                /// `vocab_size` in `config.json`.
                 pub const VOCAB_SIZE: usize = 128256;
+                /// `pad_vocab_size_multiple` in `config.json`.
                 pub const PAD_VOCAB_SIZE_MULTIPLE: usize = 16;
+                /// `n_layer` in `config.json`.
                 pub const N_LAYER: usize = 12;
+                /// `d_model` in `config.json`.
                 pub const D_MODEL: usize = 768;
+                /// `d_intermediate` in `config.json`: the width of the
+                /// feed-forward, before [mlp] rounds it to a multiple of 128.
                 pub const D_INTERMEDIATE: usize = $d_intermediate;
+                /// `mimo_rank` in `config.json`. For the SISO checkpoint
+                /// (`is_mimo: false`), `Mamba3.__init__` sets it to 1.
                 pub const MIMO_RANK: usize = $mimo_rank;
-                /// The SSD chunk length the checkpoint was trained with.
+                /// The chunk length of the SSD scan in the training of the
+                /// checkpoint (`chunk_size` in `config.json`).
                 pub const CHUNK_LEN: usize = $chunk_len;
 
                 /// The SwiGLU feed-forward of each layer: the reference
-                /// `GatedMLP` (`mlp.py`). It rounds `d_intermediate` up to a
+                /// `GatedMLP` (`mlp.py`). It rounds `d_intermediate` to the next
                 /// multiple of 128. So the `fc1` of the MIMO checkpoint is
                 /// `[2·1280, 768]`, and its `config.json` says `1264`.
                 pub fn mlp() -> GatedMlpConfig {
@@ -448,6 +485,8 @@ pub mod hf {
                     }
                 }
 
+                /// The topology of this checkpoint. A comment beside each value
+                /// names its source.
                 pub fn topology() -> MambaVocabNetConfig {
                     MambaVocabNetConfig {
                         shape: VocabShape {
@@ -503,6 +542,8 @@ pub mod hf {
                     }
                 }
 
+                /// The scan of a forward: the `SerialRecalculated` SSD path, at
+                /// the chunk length of the training ([CHUNK_LEN]).
                 pub fn ssd_path() -> MambaSsdPath {
                     MambaSsdPath::Mamba3(Mamba3SsdPath::SerialRecalculated(Some(CHUNK_LEN)))
                 }
@@ -546,14 +587,19 @@ pub mod hf {
 /// The native binary does both runs of one prompt, for run agreement.
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 pub struct MambaWrapper {
-    /// Which checkpoint this is — the run modes read the topology and the scan
-    /// path from it, so a build carrying several checkpoints keeps them apart.
+    /// The checkpoint of the network. A parallel run reads its scan
+    /// ([CheckpointSpec::ssd_path]). So a build with several checkpoints keeps
+    /// their scans apart.
     pub spec: &'static CheckpointSpec,
+    /// The tokenizer, with the stream of the token ids of the run.
     pub tokenizer: TokenOutputStream,
+    /// The network.
     pub mamba: MambaVocabNet,
+    /// The topology of the network. It gives the padded vocabulary size.
     pub topology: MambaVocabNetConfig,
 }
 
+/// The sampler of the run wrapper: a [LogitsProcessor] and a repeat penalty.
 pub struct LogitsProcessorWrapper {
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
@@ -562,6 +608,8 @@ pub struct LogitsProcessorWrapper {
 
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 impl MambaWrapper {
+    /// Makes the run wrapper of the checkpoint `spec`, from its tokenizer and
+    /// its network.
     pub fn new(spec: &'static CheckpointSpec, tokenizer: Tokenizer, mamba: MambaVocabNet) -> Self {
         Self {
             spec,
@@ -573,12 +621,13 @@ impl MambaWrapper {
 
     /// The end-of-sequence token names of the supported tokenizers, tried in
     /// order. `EleutherAI/gpt-neox-20b` spells it `<|endoftext|>` and
-    /// `meta-llama/Llama-3.1-8B` spells it `<|end_of_text|>`; neither vocabulary
-    /// contains the other's name, so probing is unambiguous.
+    /// `meta-llama/Llama-3.1-8B` spells it `<|end_of_text|>`. Each vocabulary
+    /// holds only its own name, so the first name that it holds is its eos
+    /// token.
     const EOS_TOKENS: [&str; 2] = ["<|endoftext|>", "<|end_of_text|>"];
 
-    /// Clears the [Tokenizer] and returns the `prompt` as a list of Vocab tokens
-    /// and also the eos token.
+    /// Clears the token ids of [Self::tokenizer]. Returns the token ids of
+    /// `prompt` and the id of the eos token.
     pub fn reset_prompt(&mut self, prompt: &str) -> anyhow::Result<(Vec<usize>, usize)> {
         self.tokenizer.clear();
         let tokens = self.tokenizer.tokenizer().encode(prompt);
@@ -600,10 +649,18 @@ impl MambaWrapper {
         Ok(empty_caches(batch, &self.mamba))
     }
 
-    /// Reset and make up to `sample_len - 1` parallel (training-friendly) calls to generate up to `sample_len - 1` tokens.
-    /// Returns how many tokens and the instant after the first token got generated.
+    /// A parallel run of `prompt`. It prints the text to stdout.
     ///
-    /// `mamba2_chunk_size`: Chunk size for Mamba2 selective scan. Defaults to 256. No effect for Mamba1.
+    /// For each new token, it does one forward over the whole sequence so far,
+    /// with no cache. The forward uses the scan of [Self::spec]. The run
+    /// stops at the eos token. It also stops before a forward when at least
+    /// `sample_len` positions gave a token.
+    ///
+    /// It returns two values:
+    ///
+    /// - the count of the positions that gave a token other than the eos
+    ///   token, prompt positions included,
+    /// - the instant after the first forward.
     pub fn run_parallel(
         &mut self,
         prompt: &str,
@@ -614,7 +671,7 @@ impl MambaWrapper {
         let (mut tokens, eos_token) = self.reset_prompt(prompt)?;
         let device = device(&self.mamba);
 
-        // prints the first token (if present), as this is used as *input* to the model
+        // No position gives the first token as an output, so print it here.
         if let Some(t) = tokens.first() {
             if let Some(t) = self.tokenizer.next_token(*t as u32) {
                 print!("{t}")
@@ -636,14 +693,13 @@ impl MambaWrapper {
             let logits_list = self.vocab_logits(logits_list);
             let logits_list = logits_list.into_data().try_to_vec::<Precision>().unwrap();
 
-            // logits contains an output for each timestep
+            // The logits have one row for each position. Skip the positions
+            // that already gave a token.
             let logits_list = logits_list
                 .chunks_exact(self.padded_vocab_size())
                 .skip(i)
                 .map(<[Precision]>::to_vec)
                 .collect::<Vec<_>>();
-
-            //
 
             for logits in logits_list.into_iter() {
                 let next_token = logits_processor_config.add_logits(i, &mut tokens, logits)?;
@@ -651,7 +707,7 @@ impl MambaWrapper {
                     break 'outer;
                 }
 
-                // if the token has some valid representation, print it
+                // Print the new text, if the token completes some.
                 if let Some(t) = self.tokenizer.next_token(next_token as u32) {
                     #[allow(unused_imports)]
                     use std::io::Write;
@@ -667,8 +723,17 @@ impl MambaWrapper {
         Ok((i, instant))
     }
 
-    /// Reset and make up to `sample_len - 1` sequential (inference-friendly) calls to generate up to `sample_len - 1` tokens.
-    /// Returns how many tokens and the instant after the first token got generated.
+    /// A sequential run of `prompt`. It prints the text to stdout.
+    ///
+    /// It does one [Self::step] for each token, the prompt tokens included,
+    /// with the caches. The run stops at the eos token, or after `sample_len`
+    /// steps.
+    ///
+    /// It returns two values:
+    ///
+    /// - the count of the steps that gave a token other than the eos token,
+    ///   prompt steps included,
+    /// - the instant after the first step.
     pub fn run_sequential(
         &mut self,
         prompt: &str,
@@ -678,7 +743,7 @@ impl MambaWrapper {
         use std::io::Write;
         let (mut tokens, eos_token) = self.reset_prompt(prompt)?;
 
-        // prints the first token (if present), as this is used as *input* to the model
+        // No step gives the first token as an output, so print it here.
         if let Some(t) = tokens.first() {
             if let Some(t) = self.tokenizer.next_token(*t as u32) {
                 print!("{t}")
@@ -701,7 +766,7 @@ impl MambaWrapper {
                 break;
             }
 
-            // if the token has some valid representation, print it
+            // Print the new text, if the token completes some.
             if let Some(t) = self.tokenizer.next_token(next_token as u32) {
                 #[allow(unused_imports)]
                 use std::io::Write;
@@ -717,9 +782,11 @@ impl MambaWrapper {
         Ok((i, instant))
     }
 
-    /// Make a cached call to generate a logits.
+    /// One step of the network for the token id `input`. Returns the vocab
+    /// logits and the caches after the step.
     ///
-    /// `i` is the i-th call. For the first call, `i` should be `0`.
+    /// `caches` holds the caches after the step before. With `None`, the step
+    /// starts from zero caches.
     pub fn step(
         &self,
         input: usize,
@@ -761,6 +828,12 @@ impl MambaWrapper {
 }
 
 impl LogitsProcessorWrapper {
+    /// Makes the sampler. [LogitsProcessor::new] reads `seed`, `temp` and
+    /// `top_p`.
+    ///
+    /// `repeat_penalty` applies to the logit of each token at the positions
+    /// `i - repeat_last_n` to `i` of [Self::add_logits] (see
+    /// [sampling::apply_repeat_penalty]). A penalty of 1.0 applies no penalty.
     pub fn new(
         seed: u64,
         temp: Option<f64>,
@@ -776,9 +849,11 @@ impl LogitsProcessorWrapper {
         }
     }
 
-    /// Add logits that represents a token.
+    /// Gives the token at the position `i + 1`, from the `logits` of the
+    /// position `i`. The first call has `i = 0`.
     ///
-    /// `i` is the i-th call. For the first call, `i` should be `0`.
+    /// Inside the prompt, it gives the next token of the prompt. After the
+    /// prompt, it samples a token and appends it to `tokens`.
     pub fn add_logits(
         &mut self,
         i: usize,
@@ -796,23 +871,18 @@ impl LogitsProcessorWrapper {
 
         let next_token;
         if i + 1 < tokens.len() {
-            // don't try to predict the next token (it was pre-defined)
-            // also don't increment the "tokens" list (this token was already part of the list)
+            // The prompt gives the next token, and `tokens` already holds it.
             next_token = tokens[i + 1];
-
-            // should it still sample? idk
-            // let _discarded_token = logits_processor.sample(&logits)?;
         } else {
-            // try to predict the next token
+            // After the prompt: sample the next token, and append it.
             next_token = self.logits_processor.sample(&logits)? as usize;
-            // add the token to the "tokens" list
             tokens.push(next_token);
-            // *generated_tokens += 1;
         }
         Ok(next_token)
     }
 }
 
+/// The device of the network: the device of its embedding.
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
 pub fn device(mamba: &MambaVocabNet) -> Device {
     mamba.embedding.weight.device()
@@ -858,15 +928,15 @@ pub fn empty_caches(batch: usize, mamba: &MambaVocabNet) -> MambaCaches {
     mamba.layers.zero_caches_2d(&x_bd)
 }
 
-/// Checks the compiled-in checkpoint list, whatever set of checkpoint features
-/// this build happens to enable.
+/// Checks the list of the compiled-in checkpoints, whatever set of checkpoint
+/// features the build has.
 #[cfg(all(test, any(feature = "mamba1", feature = "mamba2", feature = "mamba3")))]
 mod tests {
     use super::*;
 
-    /// Highest priority first, and every [CheckpointSpec::id] resolvable — that
-    /// ordering is what the entry points take when they run a single
-    /// checkpoint.
+    /// The list holds the highest priority first, and [hf::by_id] finds each
+    /// [CheckpointSpec::id]. An entry point that runs one checkpoint takes the
+    /// first entry.
     #[test]
     fn checkpoints_are_listed_by_descending_priority() {
         const PRIORITY: [&str; 4] = [
@@ -897,9 +967,9 @@ mod tests {
         assert_eq!(hf::preferred().map(|spec| spec.id), ids.first().copied());
     }
 
-    /// The two Mamba-3 checkpoints were trained with different chunk lengths, so
-    /// each one's scan must carry its own — a build with both compiled in still
-    /// keeps them apart.
+    /// The two Mamba-3 checkpoints used two different chunk lengths in their
+    /// training. So the scan of each checkpoint must hold its own chunk length,
+    /// also in a build with both checkpoints.
     #[cfg(feature = "mamba3")]
     #[test]
     fn each_mamba3_checkpoint_keeps_its_own_chunk_len() {
@@ -918,11 +988,11 @@ mod tests {
         }
     }
 
-    /// Each Mamba-3 checkpoint turns its state as the reference
-    /// implementation does, and has no mechanism that the stock block does not
-    /// have. A sequential run and a parallel run share these knobs, so run
-    /// agreement cannot show a wrong value. The expected values come from the
-    /// reference, not from burn-mamba:
+    /// Each Mamba-3 checkpoint turns its state as the reference implementation
+    /// does. It has no mechanism that the reference block does not have. A
+    /// sequential run and a parallel run share these values, so run agreement
+    /// cannot show a wrong value. The expected values come from the reference,
+    /// not from burn-mamba:
     ///
     /// - The rotation turns pairs of state entries, one angle for each pair
     ///   (`num_rope_angles` of `mamba3.py`): `Complex2D`.

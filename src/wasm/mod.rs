@@ -1,3 +1,7 @@
+//! The entry point of a browser bundle: [wasm_main]. A bundle has one
+//! front-end, the browser console or the browser page, and runs the preferred
+//! checkpoint.
+
 #[cfg(feature = "console")]
 pub mod console;
 #[cfg(feature = "yew")]
@@ -5,9 +9,9 @@ pub mod yew_ui;
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
-/// Several checkpoints may be compiled in, but a bundle runs one; without any
-/// there would be nothing to run. A family feature on its own (`mamba1`,
-/// `mamba2`, `mamba3`) enables the blocks but no checkpoint.
+/// A build can hold several checkpoints, and a bundle runs one of them. With
+/// no checkpoint, it has nothing to run. A family feature alone (`mamba1`,
+/// `mamba2`, `mamba3`) adds the blocks, but no checkpoint.
 #[cfg(not(any(
     feature = "mamba1-130m",
     feature = "mamba2-130m",
@@ -28,13 +32,16 @@ compile_error!("a wasm bundle needs exactly one front-end feature, but `console`
 #[allow(unused_imports)]
 use crate::Precision;
 
+/// The entry point of the bundle. `index.js` calls it.
+///
+/// It sets the panic hook and the logger, then starts the front-end of the
+/// bundle. The front-end sets the f32 and i32 defaults of the device before it
+/// builds the network.
 #[wasm_bindgen]
 pub async fn wasm_main() {
     std::panic::set_hook(Box::new(console_error_panic_hook::hook));
     console_log::init_with_level(log::Level::Debug).unwrap();
     log::info!("wasm initialized");
-
-    // TODO: configure the backend to the correct precision (crate::Precision).
 
     #[cfg(feature = "console")]
     console::run().await.unwrap();

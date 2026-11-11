@@ -28,83 +28,99 @@ use crate::hub::{HubError, Metadata};
 pub use model::{Connection, Model};
 use yew::prelude::*;
 
+/// A message of the browser page. [Model::update] handles each one.
 pub enum Msg {
-    // Todo,
-
-    // fetching, loading, building
-    /// Starts the huggingface api connection (fetch + IndexedDB hub cache).
+    // The hub client, and the assets: check, fetch, load, build.
+    /// Starts the connection of the hub client: `fetch`, and the hub cache in
+    /// IndexedDB.
     StartConnectApi,
-    /// Concludes the huggingface api connection (fetch + IndexedDB hub cache).
+    /// Ends the connection of the hub client. Then the page checks each
+    /// asset.
     FinishConnectApi(Api),
+    /// The connection of the hub client failed.
     FailConnectApi(HubError),
-    /// Starts the huggingface api disconnection (fetch + IndexedDB hub cache).
+    /// Not implemented: the update only logs an error. No code sends it.
     StartDisconnectApi,
-    /// Concludes the huggingface api disconnection (fetch + IndexedDB hub cache).
+    /// Not implemented: the update only logs an error. No code sends it.
     FinishDisconnectApi,
+    /// Not implemented: the update only logs an error. No code sends it.
     FailDisconnectApi,
-    /// Starts checking information about an asset (size, etc).
+    /// Starts the check of an asset: its metadata, and its download chunks in
+    /// the hub cache.
     StartAssetCheck(AssetKind),
-    /// Concludes checking information about an asset (size, etc).
+    /// Ends the check of an asset.
     FinishAssetCheck(AssetKind, Metadata, DownloadChunkList),
+    /// Not implemented: the update panics. No code sends it, because a failed
+    /// check panics before.
     FailAssetCheck,
-    /// Starts fetching an asset.
+    /// Starts the fetch of an asset: each download chunk that is not in the
+    /// hub cache.
     StartAssetFetch(AssetKind),
-    /// Concludes fetching a single download chunk of an asset.
-    /// This is useful to state about the fetching progress.
+    /// Ends one download chunk of the fetch of an asset: a fetch, or a skip of
+    /// a cached download chunk. The page shows the progress of the fetch from
+    /// it.
     FinishAssetFetchSingle(AssetKind, usize),
+    /// The fetch of one download chunk of an asset failed.
     FailAssetFetchSingle(AssetKind, usize, HubError),
-    /// Concludes fetching an asset (all download chunks).
+    /// Ends the fetch of an asset: each download chunk is in the hub cache.
     FinishAssetFetch(AssetKind),
-    /// Starts uploading an asset.
-    /// This is an alternative to the "fetch and load" mechanism.
+    /// Not available: the update only logs an error. Its button on the page is
+    /// disabled.
     StartAssetUpload(AssetKind),
-    /// Concludes uploading an asset.
+    /// Not implemented: the update only logs an error. No code sends it.
     FinishAssetUpload(AssetKind),
+    /// Not implemented: the update only logs an error. No code sends it.
     FailAssetUpload,
-    /// Starts loading an asset.
-    /// The goal is to have bytes into the memory.
+    /// Starts the load of an asset: it reads the asset from the hub cache into
+    /// memory, as bytes.
     StartAssetLoad(AssetKind),
-    /// Concludes loading an asset.
+    /// Ends the load of an asset, with its bytes. Then the build of the asset
+    /// starts.
     FinishAssetLoad(AssetKind, Vec<u8>),
+    /// The load of an asset failed.
     FailAssetLoad(AssetKind, HubError),
-    /// Unloads an asset.
-    /// The goal is to clear memory usage.
-    /// If the tokenizer or the network was built, it also gets unbuilt.
-    /// The other asset may also get unbuilt as a result of this action.
+    /// Unloads an asset: it frees the bytes of the asset, and the tokenizer or
+    /// the network that the page built from them.
+    ///
+    /// When the page has a [model::Wrapper], the unload drops it. So the
+    /// unload of one asset also unloads the other asset. A running generation
+    /// stops first.
     AssetUnload(AssetKind),
-    /// Starts erasing an asset from the hub cache.
-    /// The goal is to free HDD data.
+    /// Starts the erase of an asset from the hub cache. The erase frees the
+    /// storage of the browser.
     StartAssetErase(AssetKind),
-    /// Concludes erasing an asset from the hub cache.
+    /// Ends the erase of an asset.
     FinishAssetErase(AssetKind),
+    /// The erase of an asset failed. Then the page checks the asset again.
     FailAssetErase(AssetKind, HubError),
-    /// Starts building the tokenizer or the network from the loaded asset.
-    /// This is when the data stops being raw bytes and become tensors (etc) instead.
+    /// Starts the build of the tokenizer or the network from the loaded bytes
+    /// of an asset.
     StartAssetBuild(AssetKind),
-    /// Concludes building the tokenizer or the network from the loaded asset.
+    /// Ends the build of an asset.
     FinishAssetBuild(AssetKind),
+    /// Not implemented: the update panics. No code sends it, because a failed
+    /// build panics before.
     FailAssetBuild,
-    /// If the tokenizer and the network are built, puts them in a [model::Wrapper],
-    /// which the generation then uses.
+    /// Makes the [model::Wrapper] when the page built the tokenizer and the
+    /// network. The generation uses the wrapper.
     TryAssembleWrapper,
 
-    // user input
-    /// What the user has as inserted to the input textarea.
+    // The input.
+    /// The new text of the input box.
     InputUpdate(String),
 
-    // inference
-    /// Starts the generation.
-    /// This can only be used from a zero (clean) initial cache.
+    // The generation.
+    /// Starts the generation from the text of the input box. The caches must
+    /// be zero.
     StartGeneration,
-    /// Ask for a single inference step.
-    /// The goal is to avoid freezing the rendering by adding a small delay between the steps.
+    /// Does one step of the generation. An interval of `TICK_MILLIS` (1ms)
+    /// sends it, so the browser can paint between two steps.
     StepGeneration,
-    /// Stops (or pause) the generation.
+    /// Pauses the generation.
     StopGeneration,
-    /// Resumes the generation.
-    /// The last caches are used instead of a zero (clean) one.
+    /// Continues the generation from the last caches.
     ResumeGeneration,
-    /// Resets the last caches into a zero (clean) one.
+    /// Sets the caches to zero, and makes a new sampler.
     ResetCaches,
 }
 

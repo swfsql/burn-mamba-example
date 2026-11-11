@@ -1,19 +1,20 @@
+//! The reducer of the browser page: [Model::update] handles each [Msg].
+
 use super::Msg;
 use super::model::AssetKind;
 pub use super::model::{self, Connection, Model};
 use crate::hub::wasm::{Api, DownloadChunkKey};
 use yew::prelude::*;
 
+/// The interval between two steps of the generation, in milliseconds.
 const TICK_MILLIS: u32 = 1;
 
 impl model::Model {
+    /// Handles `msg`: it changes the state of the page, and can send more
+    /// messages. Returns `true` when the page must render again.
     pub fn update(&mut self, ctx: &Context<Self>, msg: Msg) -> bool {
         match msg {
-            // Msg::Todo => {
-            //     todo!()
-            // }
-
-            // fetching, loading, building
+            // The hub client, and the assets: check, fetch, load, build.
             Msg::StartConnectApi => {
                 assert!(self.hub_api.is_exactly_disconnected());
                 self.hub_api = Connection::Connecting;
@@ -39,25 +40,25 @@ impl model::Model {
             }
             Msg::FailConnectApi(err) => {
                 self.hub_api = Connection::Disconnected;
-                log::error!("failed to connect to the api: {err}");
+                log::error!("failed to connect the hub client: {err}");
                 true
             }
             Msg::StartDisconnectApi => {
-                log::error!("Msg::StartDisconnectApi not yet implemented");
+                log::error!("Msg::StartDisconnectApi is not implemented");
                 false
             }
             Msg::FinishDisconnectApi => {
-                log::error!("Msg::FinishDisconnectApi not yet implemented");
+                log::error!("Msg::FinishDisconnectApi is not implemented");
                 false
             }
             Msg::FailDisconnectApi => {
-                log::error!("Msg::FailDisconnectApi not yet implemented");
+                log::error!("Msg::FailDisconnectApi is not implemented");
                 false
             }
             Msg::StartAssetCheck(kind) => {
                 let asset = self.select(&kind);
                 let api = self.hub_api.as_connected().unwrap().clone();
-                // assert that a lot of data won't be cloned
+                // The asset holds no loaded bytes, so its clone is small.
                 assert!(asset.load.data.is_empty());
                 let asset = asset.clone();
                 ctx.link().send_future(async move {
@@ -115,7 +116,7 @@ impl model::Model {
                 true
             }
             Msg::FailAssetFetchSingle(kind, i, err) => {
-                log::error!("failed to fetch download chunk {i} for {kind:?}; err: {err}");
+                log::error!("failed to fetch the download chunk {i} of the asset {kind:?}: {err}");
                 let asset = self.select_mut(&kind);
                 asset.hub_cache.is_busy = false;
                 asset.hub_cache.is_done = false;
@@ -128,15 +129,15 @@ impl model::Model {
                 true
             }
             Msg::StartAssetUpload(_kind) => {
-                log::error!("Msg::StartAssetUpload not yet implemented");
+                log::error!("Msg::StartAssetUpload is not implemented");
                 false
             }
             Msg::FinishAssetUpload(_kind) => {
-                log::error!("Msg::FinishAssetUpload not yet implemented");
+                log::error!("Msg::FinishAssetUpload is not implemented");
                 false
             }
             Msg::FailAssetUpload => {
-                log::error!("Msg::FailAssetUpload not yet implemented");
+                log::error!("Msg::FailAssetUpload is not implemented");
                 false
             }
             Msg::StartAssetLoad(kind) => {
@@ -166,13 +167,13 @@ impl model::Model {
                 false
             }
             Msg::FailAssetLoad(kind, err) => {
-                log::error!("failed to load data for {kind:?}; err: {err:?}");
+                log::error!("failed to load the asset {kind:?}: {err:?}");
                 let asset = self.select_mut(&kind);
                 asset.load.is_busy = false;
                 true
             }
             Msg::AssetUnload(kind) => {
-                // stop any in-progress generation
+                // Stop a running generation first, then unload.
                 if self.is_generating {
                     ctx.link().send_message_batch(vec![
                         Msg::StopGeneration,
@@ -182,19 +183,19 @@ impl model::Model {
                     return false;
                 }
 
-                // clear generation-related memory
+                // Free the memory of the generation.
                 self.tokens.clear();
                 self.tokens.shrink_to_fit();
                 self.output.shrink_to_fit();
 
-                // clear the built tokenizer and network
+                // Drop the run wrapper: the built tokenizer and network.
                 if self.wrapper.is_some() {
                     self.wrapper = None;
                     self.tokenizer.load.is_done = false;
                     self.weights.load.is_done = false;
                 }
-                // in case the wrapper wasn't assembled yet,
-                // clear build and data-load memory
+                // With no run wrapper, free the built part and the loaded
+                // bytes of this asset.
                 else if let AssetKind::Tokenizer = kind {
                     self.wrapper_builder.tokenizer = None;
                     self.tokenizer.load.data.clear();
@@ -238,7 +239,7 @@ impl model::Model {
                 asset.hub_cache.is_busy = false;
                 asset.hub_cache.is_done = false;
 
-                // set the download chunks to uncached
+                // Mark each download chunk as not cached.
                 for download_chunk_key in asset.hub_cache.fetching.download_chunk_list.iter_mut() {
                     let owned = download_chunk_key.clone().unwrap();
                     *download_chunk_key = Err(owned);
@@ -247,14 +248,12 @@ impl model::Model {
                 true
             }
             Msg::FailAssetErase(kind, err) => {
-                log::error!("failed to erase data for {kind:?}; err: {err:?}");
+                log::error!("failed to erase the asset {kind:?}: {err:?}");
                 let asset = self.select_mut(&kind);
                 asset.hub_cache.is_busy = false;
                 asset.hub_cache.is_done = false;
-                // re-check if the data is cached or not
-                //
-                // note: if partial data has been erased, then the button will switch to
-                // the "click to fetch" option.
+                // Check the asset again. When the erase removed a part of the
+                // asset, the button then offers a fetch.
                 asset.hub_cache.is_checking = true;
                 ctx.link().send_message(Msg::StartAssetCheck(kind));
                 true
@@ -277,7 +276,8 @@ impl model::Model {
                 todo!()
             }
             Msg::TryAssembleWrapper => {
-                // consume the built tokenizer and network if they are both ready
+                // When the builder holds the tokenizer and the network, move
+                // them into the run wrapper.
                 if self.wrapper_builder.is_ready() {
                     let builder = std::mem::take(&mut self.wrapper_builder);
                     let wrapper = builder.build();
@@ -286,7 +286,7 @@ impl model::Model {
                 true
             }
 
-            // user input
+            // The input.
             Msg::InputUpdate(new) => match (self.input == new, self.is_reset) {
                 (_same @ true, _reset) => false,
                 (_same @ false, _reset @ false) => {
@@ -299,7 +299,7 @@ impl model::Model {
                 }
             },
 
-            // inference
+            // The generation.
             Msg::StartGeneration => {
                 assert!(self.is_reset);
                 assert!(!self.is_input_dirty);
@@ -310,11 +310,12 @@ impl model::Model {
                 self.step = 0;
                 let wrapper = self.wrapper.as_mut().unwrap();
                 let (tokens, eos_token) = wrapper.run_wrapper.reset_prompt(&self.input).unwrap();
-                // TODO: reset preprocessor
+                // The sampler is new: `Wrapper::new` or `Msg::ResetCaches` made
+                // it.
                 self.tokens = tokens;
                 self.eos_token = eos_token;
 
-                // gets first token (as if it were an implicit output)
+                // No step gives the first token as an output, so add it here.
                 if let Some(t) = self.tokens.first() {
                     if let Some(t) = wrapper.run_wrapper.tokenizer.next_token(*t as u32) {
                         self.output += &t;
@@ -345,7 +346,7 @@ impl model::Model {
                     .add_logits(self.step, &mut self.tokens, next_logits)
                     .unwrap();
 
-                // if the token has some valid representation, print it
+                // Add the new text, if the token completes some.
                 if let Some(t) = run_wrapper.tokenizer.next_token(next_token as u32) {
                     self.output += &t;
                 }
@@ -382,9 +383,6 @@ impl model::Model {
                 assert!(!self.is_generating);
                 let wrapper = self.wrapper.as_mut().unwrap();
                 wrapper.caches = wrapper.run_wrapper.empty_caches(1).unwrap();
-                // for state in wrapper.states.iter_mut() {
-                //     ResetParams::<f32, Cpu>::try_reset_params(state).unwrap();
-                // }
                 wrapper.processor =
                     crate::LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
                 self.is_reset = true;

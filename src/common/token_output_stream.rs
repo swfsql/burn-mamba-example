@@ -1,10 +1,11 @@
-//! Adapted from [candle-examples](https://github.com/huggingface/candle/blob/main/candle-examples/src/token_output_stream.rs),
-//! rewired onto [crate::tokenizer::Tokenizer].
+//! The token output stream of
+//! [candle-examples](https://github.com/huggingface/candle/blob/main/candle-examples/src/token_output_stream.rs),
+//! with [crate::tokenizer::Tokenizer] in place of the `tokenizers` crate.
 
 use crate::tokenizer::Tokenizer;
 
-/// This is a wrapper around a tokenizer to ensure that tokens can be returned to the user in a
-/// streaming way rather than having to wait for the full decoding.
+/// A tokenizer with a stream of token ids. It gives the text of each new token
+/// when the token comes, not only at the end.
 pub struct TokenOutputStream {
     tokenizer: Tokenizer,
     tokens: Vec<u32>,
@@ -13,6 +14,7 @@ pub struct TokenOutputStream {
 }
 
 impl TokenOutputStream {
+    /// Makes an empty stream with `tokenizer`.
     pub fn new(tokenizer: Tokenizer) -> Self {
         Self {
             tokenizer,
@@ -22,6 +24,7 @@ impl TokenOutputStream {
         }
     }
 
+    /// Returns the tokenizer, and drops the stream.
     pub fn into_inner(self) -> Tokenizer {
         self.tokenizer
     }
@@ -30,6 +33,9 @@ impl TokenOutputStream {
         self.tokenizer.decode(tokens, true)
     }
 
+    /// Appends `token` to the stream. Returns the new text when the decoded
+    /// text grows and ends with a letter. Else it returns `None`, and a later
+    /// token gives the text.
     // https://github.com/huggingface/text-generation-inference/blob/5ba53d44a18983a4de32d122f4cb46f4a17d9ef6/server/text_generation_server/models/model.py#L68
     pub fn next_token(&mut self, token: u32) -> Option<String> {
         let prev_text = if self.tokens.is_empty() {
@@ -50,6 +56,7 @@ impl TokenOutputStream {
         }
     }
 
+    /// The text of the last tokens, which [Self::next_token] held back.
     pub fn decode_rest(&self) -> Option<String> {
         let prev_text = if self.tokens.is_empty() {
             String::new()
@@ -66,18 +73,22 @@ impl TokenOutputStream {
         }
     }
 
+    /// The text of all the tokens of the stream.
     pub fn decode_all(&self) -> String {
         self.decode(&self.tokens)
     }
 
+    /// The id of the token `token_s`, added tokens included.
     pub fn get_token(&self, token_s: &str) -> Option<u32> {
         self.tokenizer.token_to_id(token_s)
     }
 
+    /// The tokenizer.
     pub fn tokenizer(&self) -> &Tokenizer {
         &self.tokenizer
     }
 
+    /// Removes all the tokens of the stream.
     pub fn clear(&mut self) {
         self.tokens.clear();
         self.prev_index = 0;

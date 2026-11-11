@@ -3,15 +3,13 @@ on:
     push:
         branches:
             - main
-    # tags:
-    # pull_request:
 env:
     CARGO_TERM_COLOR: always
 
-    # if a test fails, shows the backtrace
+    # A failed test shows its backtrace.
     RUST_BACKTRACE: 1
 
-    # if depending on a ssh crate, use the git cli.
+    # Cargo gets each git dependency with the git CLI.
     CARGO_NET_GIT_FETCH_WITH_CLI: true
 jobs:
     build:
@@ -26,7 +24,7 @@ jobs:
             - name: Install stable (for the native steps of the check)
               uses: dtolnay/rust-toolchain@stable
 
-            # rust compiler for creating binaries
+            # The nightly toolchain, for the wasm builds.
             - name: Install latest nightly (for wasm)
               uses: dtolnay/rust-toolchain@nightly
               with:
@@ -38,7 +36,7 @@ jobs:
                   set -e
                   rustup target add wasm32-unknown-unknown
 
-            # Runs some Rust-related caching
+            # Caches the cargo registry and the build artifacts between runs.
             - uses: Swatinem/rust-cache@v2
 
             # A failed check stops the deploy.
@@ -67,19 +65,20 @@ jobs:
               run: |
                   set -e
                   for checkpoint in mamba1-130m mamba2-130m mamba3-siso-187m mamba3-mimo-187m; do
-                      # Prepare the publishing structure
+                      # One directory for each checkpoint.
                       mkdir -p "publish/$checkpoint"
 
-                      # move the page files and the bundle
+                      # Move the page files and the bundle.
                       mv "frontend/$checkpoint/index.html" "publish/$checkpoint/"
                       mv "frontend/$checkpoint/index.js" "publish/$checkpoint/"
                       mv "frontend/$checkpoint/pkg/" "publish/$checkpoint/pkg/"
 
-                      # rm gitignore
+                      # Delete the .gitignore that wasm-pack writes into pkg/, so
+                      # that gh-pages receives the bundle.
                       rm "publish/$checkpoint/pkg/.gitignore"
                   done
 
-            # Publish
+            # Publish the four pages to gh-pages.
             - name: Frontend Deploy
               uses: peaceiris/actions-gh-pages@v3
               with:

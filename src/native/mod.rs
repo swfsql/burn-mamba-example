@@ -1,3 +1,13 @@
+//! The native binary. It fetches the files of one checkpoint and builds the
+//! network. Then it does a sequential run and a parallel run of one prompt.
+//!
+//! The parallel run gives a shorter text. When it agrees with the start of the
+//! sequential text, the two runs show run agreement. To check a backend,
+//! compare its text with the text of a reference backend (flex or ndarray).
+//!
+//! `MAMBA_CHECKPOINT=<id>` selects a compiled-in checkpoint. Without it, the
+//! binary runs the preferred checkpoint.
+
 #[allow(unused_imports)]
 use crate::Precision;
 use crate::hub::sync::Api;
@@ -7,9 +17,9 @@ use crate::{CheckpointSpec, LogitsProcessorWrapper, MambaWrapper, WeightsSource,
 use burn::prelude::*;
 use log::info;
 
-/// Several checkpoints may be compiled in, but the binary runs one; without any
-/// there would be nothing to run. A family feature on its own (`mamba1`,
-/// `mamba2`, `mamba3`) enables the blocks but no checkpoint.
+/// A build can hold several checkpoints, and the binary runs one of them. With
+/// no checkpoint, it has nothing to run. A family feature alone (`mamba1`,
+/// `mamba2`, `mamba3`) adds the blocks, but no checkpoint.
 #[cfg(not(any(
     feature = "mamba1-130m",
     feature = "mamba2-130m",
@@ -21,13 +31,14 @@ compile_error!(
      `mamba1-130m`, `mamba2-130m`, `mamba3-siso-187m` and/or `mamba3-mimo-187m`"
 );
 
-/// Picks the checkpoint to run out of everything compiled in: `MAMBA_CHECKPOINT`
-/// (a [CheckpointSpec::id]) when set, else the highest-priority one.
+/// Picks the compiled-in checkpoint to run: the checkpoint of
+/// `MAMBA_CHECKPOINT` (a [CheckpointSpec::id]) when it is set, else the
+/// preferred checkpoint.
 pub fn select_checkpoint() -> anyhow::Result<&'static CheckpointSpec> {
     match std::env::var("MAMBA_CHECKPOINT") {
         Ok(id) => hf::by_id(id.trim()).ok_or_else(|| {
             anyhow::anyhow!(
-                "MAMBA_CHECKPOINT={id:?} is not compiled into this binary; available: {:?}",
+                "MAMBA_CHECKPOINT={id:?} is not in this binary. The binary has: {:?}",
                 hf::ids()
             )
         }),
@@ -36,6 +47,9 @@ pub fn select_checkpoint() -> anyhow::Result<&'static CheckpointSpec> {
     }
 }
 
+/// The entry point of the native binary. It builds the run wrapper of the
+/// selected checkpoint. Then it does a sequential run and a parallel run of the
+/// prompt "Mamba is the", and logs the speed of each run.
 pub fn main() -> anyhow::Result<()> {
     let () = pretty_env_logger::formatted_timed_builder()
         .filter(Some("burn_mamba_example"), log::LevelFilter::Info)
@@ -44,14 +58,14 @@ pub fn main() -> anyhow::Result<()> {
 
     let spec = select_checkpoint()?;
     info!(
-        "running {} (id {:?}); compiled-in checkpoints, by priority: {:?}",
+        "running {} (id {:?}). The compiled-in checkpoints, by priority: {:?}",
         spec.display_name,
         spec.id,
         hf::ids()
     );
     let mut wrapper = build_wrapper(spec)?;
 
-    info!("running in sequential mode (inference-friendly)");
+    info!("starting the sequential run");
     let sample_len = 80;
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
     let (sample_len, start) = wrapper.run_sequential("Mamba is the", sample_len, &mut processor)?;
@@ -63,7 +77,7 @@ pub fn main() -> anyhow::Result<()> {
         (sample_len * 1000) as f32 / elapsed as f32
     );
 
-    info!("running in parallel mode (training-friendly)");
+    info!("starting the parallel run");
     let sample_len = 20;
     let mut processor = LogitsProcessorWrapper::new(299792458, None, None, 1.1, 1024);
     let (sample_len, start) = wrapper.run_parallel("Mamba is the", sample_len, &mut processor)?;
@@ -80,11 +94,12 @@ pub fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Fetches (or reuses) the tokenizer and the weights of the checkpoint, then
-/// builds the network.
+/// Fetches each missing file of the checkpoint `spec` into the hub cache: the
+/// tokenizer file and the weights file. Then it builds the run wrapper from
+/// the two files.
 ///
-/// Takes the checkpoint to build, so a binary carrying several can build any of
-/// them (see [hf::CHECKPOINTS]).
+/// A binary with several checkpoints can build each of them (see
+/// [hf::CHECKPOINTS]).
 pub fn build_wrapper(spec: &'static CheckpointSpec) -> anyhow::Result<MambaWrapper> {
     let start = std::time::Instant::now();
 
@@ -102,7 +117,7 @@ pub fn build_wrapper(spec: &'static CheckpointSpec) -> anyhow::Result<MambaWrapp
     ));
     let weights_file = spec.file_path_model_safetensors;
     let mamba_filename = repo.get(&FilePath(weights_file.into()))?;
-    info!("mamba {weights_file} path: {mamba_filename:?}");
+    info!("weights {weights_file} path: {mamba_filename:?}");
     info!("retrieved the files in {:?}", start.elapsed());
 
     let tokenizer = Tokenizer::from_file(tokenizer_filename)?;
@@ -111,7 +126,7 @@ pub fn build_wrapper(spec: &'static CheckpointSpec) -> anyhow::Result<MambaWrapp
     {
         device
             .configure((crate::PRECISION_FLOAT_D_TYPE, crate::PRECISION_INT_D_TYPE))
-            .expect("Failed to install fp32/i32 device defaults");
+            .expect("failed to set the f32 and i32 defaults of the device");
     }
 
     let start = std::time::Instant::now();

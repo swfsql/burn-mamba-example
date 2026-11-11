@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 #
-# bench.sh — run the whole-model benchmarks (benches/model.rs) in every backend
-# configuration and collect the results into a comparison report (bench.md).
+# bench.sh: runs the network benchmarks (benches/model.rs) in each bench
+# configuration, and writes the results into a comparison report (bench.md).
 #
-# Every build carries all four checkpoints (mamba1-130m, mamba2-130m,
-# mamba3-siso-187m, mamba3-mimo-187m), so each run measures every checkpoint;
-# the networks themselves are built with random weights, so nothing is
-# downloaded.
+# Each build holds the four checkpoints (mamba1-130m, mamba2-130m,
+# mamba3-siso-187m, mamba3-mimo-187m), so each run measures each checkpoint.
+# The bench builds the networks with random weights, so it fetches nothing.
 #
 # Configurations
 # --------------
@@ -17,59 +16,58 @@
 #
 # Three builds, four configurations
 # --------------------------------
-# `flex` and `cuda` share one build: several backends can be compiled in at once
-# and `BURN_DEVICE` chooses between them at runtime.
+# `flex` and `cuda` share one build. A build can hold several backends, and
+# `BURN_DEVICE` picks one at run time.
 #
-# Fusion, however, is compile-time. `burn_cuda::Cuda` is a *type alias*:
-# `CubeBackend<CudaRuntime>` normally, `Fusion<CubeBackend<CudaRuntime>>` under the
-# `fusion` feature. `DispatchDevice::Cuda` is hard-bound to that alias (there is no
-# fusion *device* variant, unlike autodiff), so the fused build is necessarily a
-# different binary. Autotune is likewise a compile-time cubecl feature — its
-# runtime knobs set the tuning *level* and cache, never "off".
+# Fusion is a compile-time choice. `burn_cuda::Cuda` is a *type alias*:
+# `CubeBackend<CudaRuntime>`, or `Fusion<CubeBackend<CudaRuntime>>` with the
+# `fusion` feature. `DispatchDevice::Cuda` binds to that alias, and there is no
+# fusion *device* variant (as there is for autodiff). So the fused build must be
+# a different binary. Autotune is also a compile-time cubecl feature. Its
+# run-time settings set the tuning *level* and the autotune cache, never "off".
 #
-# `flex-native` is the third build: the same CPU backend compiled for this machine's
-# ISA instead of the architecture's baseline, which is what `README.md` tells you to
-# run the app with, and the axis the dfdx sibling's whole report is about (its
-# `generic` and `native` columns). It carries no CUDA feature, so a machine without
-# a CUDA toolkit can still produce it.
+# `flex-native` is the third build: the same CPU backend, compiled for the ISA
+# of this machine and not for the baseline of the architecture. `README.md`
+# tells you to run the app this way. The build has no CUDA feature, so a
+# machine without a CUDA toolkit can still make it.
 #
-# Every row pins `-C target-cpu` explicitly rather than letting one of them mean
-# "whatever the ambient build happens to do": `RUSTFLAGS` *replaces*
-# `build.rustflags` / `target.*.rustflags` rather than adding to them, so a
-# `.cargo/config.toml` further up the tree cannot leak into a column — and cannot
-# contribute to one either, so anything else it sets for the host target (a linker
-# flag, say) is gone from these builds. Override the baseline with
-# `BENCH_BASELINE_CPU` if your architecture wants a different name. The GPU rows
-# take the baseline too —
-# their kernels are compiled by cubecl at runtime, so the host ISA is not what they
-# measure, but pinning keeps them reproducible.
+# Each row sets `-C target-cpu` explicitly, so no row depends on the flags of
+# the environment. `RUSTFLAGS` *replaces* `build.rustflags` and
+# `target.*.rustflags`, and does not add to them. So a `.cargo/config.toml`
+# higher in the tree cannot change a column. It also cannot add to one. So
+# each other flag that it sets for the host target, for example a linker flag,
+# is absent from these builds. Set `BENCH_BASELINE_CPU` if your architecture
+# needs a different baseline name. The GPU rows also use the baseline. Their
+# kernels come from cubecl at run time, so the host ISA is not what they
+# measure. But the fixed flag keeps them reproducible.
 #
-# `RUSTFLAGS` is part of the build fingerprint, so each build keeps its own
-# `CARGO_TARGET_DIR`: re-running this script rebuilds nothing, the columns cannot
-# invalidate each other's artifacts, and the criterion baseline histories stay
-# separate.
+# `RUSTFLAGS` is part of the build fingerprint, so each build has its own
+# `CARGO_TARGET_DIR`. So a second run of this script rebuilds nothing. No column
+# can invalidate the artifacts of another column. The baseline histories of
+# criterion also stay separate.
 #
 # Usage
 # -----
 #   ./bench.sh                        # all four configurations
-#   ./bench.sh step                   # only cases matching the criterion filter
-#   BENCH_SEQ=1024 ./bench.sh         # any BENCH_* override the bench understands
-#   BENCH_BUDGET_MS=20000 ./bench.sh  # shorten the per-case measurement cap
+#   ./bench.sh step                   # only the cases that match the criterion filter
+#   BENCH_SEQ=1024 ./bench.sh         # each BENCH_* setting of the bench
+#   BENCH_BUDGET_MS=20000 ./bench.sh  # a shorter measurement cap for each case
 #   BENCH_SKIP=cuda,cuda-fusion-autotune ./bench.sh   # skip configurations by label
 #
-# Each case measures for at most `BENCH_BUDGET_MS` (default 60s) — the bench times
-# one iteration after the warm-up and plans from it, taking between 10 and 100 of
-# them — so a whole run is at worst `configurations × cases × 1 minute`, plus the
-# builds. Raising `BENCH_SEQ` does not extend that; it buys fewer samples of a
-# longer iteration, until one iteration alone exceeds a tenth of the budget and
-# the bench starts reporting `over-budget` (criterion cannot take fewer than 10
-# samples). The dfdx sibling's bench.sh is capped the same way, on purpose.
+# Each case measures for at most `BENCH_BUDGET_MS` (default 60s). The bench
+# times one iteration after the warm-up, plans from it, and takes between 10
+# and 100 iterations. So a whole run takes at most
+# `configurations × cases × 1 minute`, plus the builds. A larger `BENCH_SEQ`
+# does not make the run longer. It buys fewer samples of a longer iteration,
+# until one iteration alone exceeds a tenth of the budget. Then the bench
+# reports `over-budget`, because criterion cannot take fewer than 10 samples.
 #
-# A skipped configuration is carried over from its previous log only when that log
-# is still about the same thing: same shape, budget and checkpoints, and the same set of
-# cases this invocation measured. Otherwise the column is left out, since silently
-# mixing runs taken at another filter or size would be worse. The report names each
-# column's measurement date, so a carried-over one is visible as such.
+# The report keeps a skipped configuration from its last log only when that
+# log measured the same workload. That is the same shape, budget and
+# checkpoints, and the same set of cases as this run. If not, the report drops
+# the column, because a mix with runs at another filter or size is worse. The
+# report gives the measurement date of each column, so a kept column is
+# visible.
 
 set -euo pipefail
 cd "$(dirname "$0")"

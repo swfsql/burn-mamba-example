@@ -1,3 +1,5 @@
+//! The view of the browser page: [Model::view] renders the page with Bulma.
+
 use super::Msg;
 use super::model::AssetKind;
 pub use super::model::{self, Connection, Model};
@@ -5,6 +7,9 @@ use crate::wasm::yew_ui::model::Asset;
 use yew::prelude::*;
 
 impl model::Model {
+    /// Renders the page: the input box, the output box, the generation
+    /// controls, an asset card for each asset, and the state of the hub
+    /// client.
     pub fn view(&self, ctx: &Context<Self>) -> Html {
         let link = ctx.link();
 
@@ -28,7 +33,7 @@ impl model::Model {
                             </span>
                         } else {
                             <span class="tag is-loading is-light">
-                                {"Awaiting.."}
+                                {"Connecting.."}
                             </span>
                         }
                     </div>
@@ -47,7 +52,7 @@ impl model::Model {
                 value={self.input.clone()}
                 oninput={link.callback(|e: InputEvent| Msg::InputUpdate(value_from_event(e)))}
             />
-            <label class="help">{"TODO"}</label>
+            <label class="help">{"The generation continues this text. An edit applies at the next start."}</label>
             </div>
         };
         let output = html_nested! {
@@ -57,10 +62,10 @@ impl model::Model {
                 class="textarea"
                 name="mamba-output"
                 rows="8"
-                placeholder="The continuation prediction will appear in here.."
+                placeholder="The generated text shows here.."
                 value={self.output.clone()}
             />
-            <label class="help">{"TODO"}</label>
+            <label class="help">{"The input text, then the generated text."}</label>
             </div>
         };
         let controls = html_nested! {
@@ -99,7 +104,7 @@ impl model::Model {
                         >
                         {"Start Generation"}
                     </button>
-                    <label class="help">{"Assets not yet loaded"}</label>
+                    <label class="help">{"Load the two assets first"}</label>
                 }
             </div>
             <div class="tile is-child">
@@ -115,7 +120,6 @@ impl model::Model {
                     } else if self.is_reset {
                         <button
                             class="button"
-                            // disabled={true}
                             >
                             {"Reset Caches"}
                         </button>
@@ -136,7 +140,7 @@ impl model::Model {
                         >
                         {"Reset Caches"}
                     </button>
-                    <label class="help">{"Assets not yet loaded"}</label>
+                    <label class="help">{"Load the two assets first"}</label>
                 }
             </div>
             </div>
@@ -233,7 +237,7 @@ fn asset_card<M: yew::Component<Message = Msg>>(
                         {"Not loaded"}
                     </button>
                     <label class="help">
-                        {"Please fetch or upload"}
+                        {"Fetch it first"}
                     </label>
                 </>
                 }
@@ -260,7 +264,8 @@ fn asset_card<M: yew::Component<Message = Msg>>(
             </label>
         </>
         },
-        // TODO: remove since the unload happens all at once before a re-render
+        // The match needs this arm, but no render shows it: an unload runs in
+        // one update.
         (false, _loaded @ true, _unloading @ true) => html_nested! {<>
             <button class="button is-loading" disabled={true}>
                 {"Unloading"}
@@ -361,8 +366,7 @@ fn asset_card<M: yew::Component<Message = Msg>>(
                     {"Load from file"}
                 </button>
                 <label class="help">
-                    {"TODO"}
-                    // {"Click to upload"}
+                    {"Not available"}
                 </label>
             </div>
         </div>
@@ -370,6 +374,7 @@ fn asset_card<M: yew::Component<Message = Msg>>(
     }
 }
 
+/// The text of the text area that sent the input event `e`.
 pub fn value_from_event(e: InputEvent) -> String {
     use wasm_bindgen::JsCast;
     let event: Event = e.dyn_into().unwrap();

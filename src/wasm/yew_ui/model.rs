@@ -1,3 +1,6 @@
+//! The state of the browser page: the [Model], with its two [Asset]s, the
+//! connection of the hub client and the run wrapper.
+
 use crate::hub::wasm::{Api, ApiRepo, DownloadChunkList};
 use crate::hub::{
     Endpoint, FilePath, FileUrl, HubError, Metadata, Repo, RepoId, RepoType, RevisionPath,
@@ -8,56 +11,68 @@ use crate::{CheckpointSpec, LogitsProcessorWrapper, MambaWrapper, WeightsSource,
 use burn::prelude::*;
 use burn_mamba::prelude::*;
 
-/// The checkpoint this page runs.
+/// The checkpoint of this page.
 ///
-/// A bundle may carry several; the page drives one, so it takes the
-/// highest-priority compiled-in checkpoint (see [hf::preferred]).
+/// A bundle can hold several checkpoints, and the page runs one of them. So
+/// it takes the preferred checkpoint (see [hf::preferred]).
 fn active() -> &'static CheckpointSpec {
     hf::preferred().expect("no checkpoint feature is enabled in this build")
 }
 
+/// The state of the browser page: its assets, its run wrapper and its
+/// generation.
 pub struct Model {
-    // general data
-    /// Backend device.
+    // The device and the checkpoint.
+    /// The device of the network. [Model::default] sets its f32 and i32
+    /// defaults.
     pub device: Device,
-    /// Which checkpoint the asset cards fetch and the generation runs.
+    /// The checkpoint that the asset cards fetch and the generation runs.
     pub spec: &'static CheckpointSpec,
 
-    // fetching, loading, building
-    /// Can check the hub cache, fetch and load data.
+    // The hub client and the assets.
+    /// The hub client. It checks, fetches, loads and erases the assets.
     pub hub_api: Connection<Api>,
-    /// Stores hub cache and load status information, and also loaded bytes data.
+    /// The tokenizer file: its state in the hub cache, its load and its
+    /// loaded bytes.
     pub tokenizer: Asset,
-    /// Stores hub cache and load status information, and also loaded bytes data.
+    /// The weights file: its state in the hub cache, its load and its loaded
+    /// bytes.
     pub weights: Asset,
-    /// Consumes loaded bytes data to build the tokenizer and the network.
+    /// Builds the tokenizer and the network from the loaded bytes. It holds
+    /// them until the page makes the run wrapper.
     pub wrapper_builder: MambaWrapperBuilder,
 
-    // built tokenizer and network
-    /// The run wrapper with its caches and its sampler, once the tokenizer and
-    /// the network are built.
+    // The run wrapper.
+    /// The run wrapper, with its caches and its sampler. It is `None` until
+    /// the page builds the tokenizer and the network.
     pub wrapper: Option<Wrapper>,
 
-    // inference-related data
-    /// Current user input.
+    // The generation.
+    /// The text of the input box.
     pub input: String,
-    /// Whether the ongoing generation possibly no longer reflects the (new) user input.
+    /// Whether the generation can differ from the input box, after an edit of
+    /// the input. No code sets it to `true`.
     pub is_input_dirty: bool,
+    /// Whether the caches are zero. Only then can the generation start.
     pub is_reset: bool,
+    /// Whether the generation runs.
     pub is_generating: bool,
+    /// The interval that sends [super::Msg::StepGeneration] after a start or a
+    /// resume of the generation. [super::Msg::StopGeneration] drops it, and
+    /// the drop stops the interval. At the eos token, the interval continues.
     pub generation_callback_interval: Option<gloo_timers::callback::Interval>,
-    //
-    /// Current token step index (for logits selection).
+    /// The position of the next step in [Self::tokens].
     pub step: usize,
-    /// Tokens being (at first) introduced into or (later) produced by the generation.
+    /// The token ids of the prompt, then the generated token ids.
     pub tokens: Vec<usize>,
-    /// Current generation result (token concatenation from each generation step).
+    /// The text so far: the prompt, then the generated text.
     pub output: String,
     /// The token the network uses to signal the end of the generation.
     pub eos_token: usize,
 }
 
 impl Model {
+    /// The asset of `kind`.
     pub fn select(&self, kind: &AssetKind) -> &Asset {
         match kind {
             AssetKind::Tokenizer => &self.tokenizer,
@@ -65,6 +80,7 @@ impl Model {
         }
     }
 
+    /// The asset of `kind`, as a mutable reference.
     pub fn select_mut(&mut self, kind: &AssetKind) -> &mut Asset {
         match kind {
             AssetKind::Tokenizer => &mut self.tokenizer,
@@ -79,16 +95,16 @@ impl Default for Model {
         {
             device
                 .configure((crate::PRECISION_FLOAT_D_TYPE, crate::PRECISION_INT_D_TYPE))
-                .expect("Failed to install fp32/i32 device defaults");
+                .expect("failed to set the f32 and i32 defaults of the device");
         }
 
         let spec = active();
 
         Self {
-            // general data
+            // The device and the checkpoint.
             device,
             spec,
-            // fetching, loading, building
+            // The hub client and the assets.
             hub_api: Connection::Disconnected,
             tokenizer: Asset::new(
                 "Tokenizer".into(),
@@ -114,10 +130,10 @@ impl Default for Model {
             ),
             wrapper_builder: MambaWrapperBuilder::default(),
 
-            // built tokenizer and network
+            // The run wrapper.
             wrapper: None,
 
-            // inference-related data
+            // The generation.
             input: "Mamba is the".into(),
             is_input_dirty: false,
             is_reset: true,
@@ -131,9 +147,14 @@ impl Default for Model {
     }
 }
 
+/// Builds the tokenizer and the network of the checkpoint from the loaded
+/// bytes of each asset. It holds them until both exist.
 pub struct MambaWrapperBuilder {
+    /// The checkpoint to build.
     pub spec: Option<&'static CheckpointSpec>,
+    /// The built tokenizer.
     pub tokenizer: Option<Tokenizer>,
+    /// The built network.
     pub mamba: Option<MambaVocabNet>,
 }
 
@@ -148,12 +169,16 @@ impl Default for MambaWrapperBuilder {
 }
 
 impl MambaWrapperBuilder {
+    /// Whether the builder holds the tokenizer and the network.
     pub fn is_ready(&self) -> bool {
         self.tokenizer.is_some() && self.mamba.is_some()
     }
+    /// Makes the [Wrapper]. It panics when [Self::is_ready] is false.
     pub fn build(self) -> Wrapper {
         self.into()
     }
+    /// Builds the tokenizer or the network from `data`, the loaded bytes of
+    /// the asset `kind`. It panics when the build fails.
     pub fn with(&mut self, kind: &AssetKind, data: Vec<u8>, device: &Device) {
         match kind {
             AssetKind::Tokenizer => {
@@ -177,6 +202,7 @@ impl MambaWrapperBuilder {
             }
         }
     }
+    /// Takes each part from `self`, else from `other`.
     pub fn merge(self, other: Self) -> Self {
         Self {
             spec: self.spec.or(other.spec),
@@ -195,27 +221,35 @@ impl From<MambaWrapperBuilder> for Wrapper {
             }
             (None, _, _) => panic!("missing checkpoint spec"),
             (_, None, _) => panic!("missing tokenizer"),
-            (_, _, None) => panic!("missing mamba"),
+            (_, _, None) => panic!("missing network"),
         }
     }
 }
 
+/// The state of a connection, with its client `T`.
 pub enum Connection<T> {
+    /// No connection.
     Disconnected,
+    /// The connection is in progress.
     Connecting,
+    /// The connection is open.
     Connected(T),
+    /// The disconnection is in progress. No code makes this state.
     Disconnecting(T),
 }
 
 impl<T> Connection<T> {
-    /// Note: not connected does not implies disconnected.
+    /// Whether the state is [Self::Connected]. A state that is not connected
+    /// can be a state other than [Self::Disconnected].
     pub fn is_exactly_connected(&self) -> bool {
         matches!(self, Self::Connected(_))
     }
-    /// Note: not disconnected does not implies connected.
+    /// Whether the state is [Self::Disconnected]. A state that is not
+    /// disconnected can be a state other than [Self::Connected].
     pub fn is_exactly_disconnected(&self) -> bool {
         matches!(self, Self::Disconnected)
     }
+    /// The client, when the state is [Self::Connected].
     pub fn as_connected(&self) -> Option<&T> {
         if let Self::Connected(connected) = &self {
             Some(connected)
@@ -225,13 +259,18 @@ impl<T> Connection<T> {
     }
 }
 
+/// The run wrapper of the page, with its caches and its sampler.
 pub struct Wrapper {
+    /// The run wrapper.
     pub run_wrapper: MambaWrapper,
+    /// The caches after the last step.
     pub caches: MambaCaches,
+    /// The sampler.
     pub processor: LogitsProcessorWrapper,
 }
 
 impl Wrapper {
+    /// Makes the wrapper, with zero caches and a new sampler.
     pub fn new(run_wrapper: MambaWrapper) -> Self {
         let caches = run_wrapper.empty_caches(1).unwrap();
         Self {
@@ -242,15 +281,23 @@ impl Wrapper {
     }
 }
 
+/// One asset of the page: the tokenizer file or the weights file. It has two
+/// separate states: its [HubCacheState] in the hub cache, and its [Load] in
+/// memory.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Asset {
+    /// The name on the asset card.
     pub label: String,
+    /// The source of the asset.
     pub config: AssetConfig,
+    /// The state of the asset in memory.
     pub load: Load,
+    /// The state of the asset in the hub cache.
     pub hub_cache: HubCacheState,
 }
 
 impl Asset {
+    /// Makes an asset in the check state: the page checks it first.
     pub fn new(label: String, config: AssetConfig) -> Self {
         Self {
             label,
@@ -261,19 +308,26 @@ impl Asset {
     }
 }
 
+/// Which of the two assets.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AssetKind {
+    /// The tokenizer file.
     Tokenizer,
+    /// The weights file of the checkpoint.
     Weights,
 }
 
+/// The source of an asset.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AssetConfig {
+    /// A file of the HuggingFace hub.
     Huggingface(HuggingfaceConfig),
+    /// Not available: each method panics (`todo!`). No code makes it.
     Custom(CustomConfig),
 }
 
 impl AssetConfig {
+    /// The handle on the repo of the asset.
     pub fn api_repo(&self, api: &Api) -> ApiRepo {
         match &self {
             AssetConfig::Custom(_) => {
@@ -283,6 +337,7 @@ impl AssetConfig {
         }
     }
 
+    /// The URL of the file of the asset.
     pub fn file_url(&self) -> FileUrl {
         match &self {
             AssetConfig::Custom(_) => {
@@ -292,6 +347,7 @@ impl AssetConfig {
         }
     }
 
+    /// The path of the file of the asset in its repo.
     pub fn file_path(&self) -> &FilePath {
         match &self {
             AssetConfig::Custom(_) => {
@@ -301,6 +357,7 @@ impl AssetConfig {
         }
     }
 
+    /// Requests the metadata of the file of the asset from the hub.
     pub async fn metadata(&self, api: &Api) -> Result<Metadata, HubError> {
         match &self {
             AssetConfig::Custom(_) => {
@@ -309,6 +366,8 @@ impl AssetConfig {
             AssetConfig::Huggingface(hf) => hf.metadata(api).await,
         }
     }
+    /// Plans the download chunks of the file of the asset (see
+    /// [ApiRepo::check]).
     pub async fn check(
         &self,
         api: &Api,
@@ -323,6 +382,8 @@ impl AssetConfig {
     }
 }
 
+/// A file of the HuggingFace hub: the hub, the repo, the revision and the
+/// path of the file.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HuggingfaceConfig {
     endpoint: Endpoint,
@@ -334,22 +395,26 @@ pub struct HuggingfaceConfig {
 }
 
 impl HuggingfaceConfig {
+    /// The handle on the repo of the file, at its revision.
     pub fn api_repo(&self, api: &Api) -> ApiRepo {
         let repo = Repo::with_revision(self.repo_id.clone(), self.repo_type, self.revision.clone());
         api.repo(repo)
     }
 
+    /// The URL of the file.
     pub fn file_url(&self) -> FileUrl {
         let repo = Repo::with_revision(self.repo_id.clone(), self.repo_type, self.revision.clone());
         self.url_template
             .url(&self.endpoint, &repo, &self.revision, &self.filepath)
     }
 
+    /// Requests the metadata of the file from the hub.
     pub async fn metadata(&self, api: &Api) -> Result<Metadata, HubError> {
         let api_repo = self.api_repo(api);
         let file_url = api_repo.url(&self.filepath);
         api.metadata(&file_url).await
     }
+    /// Plans the download chunks of the file (see [ApiRepo::check]).
     pub async fn check(
         &self,
         api: &Api,
@@ -359,14 +424,21 @@ impl HuggingfaceConfig {
     }
 }
 
+/// Not available. No code makes it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CustomConfig {}
 
+/// The state of an asset in memory.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Load {
+    /// Whether the check of the asset runs.
     pub is_checking: bool,
+    /// Whether the page loaded the asset and built the tokenizer or the
+    /// network from it.
     pub is_done: bool,
+    /// Whether a load or a build of the asset runs.
     pub is_busy: bool,
+    /// The loaded bytes. The build takes them, so they are empty after it.
     pub data: Vec<u8>,
 }
 
@@ -381,11 +453,16 @@ impl Default for Load {
     }
 }
 
+/// The state of an asset in the hub cache.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HubCacheState {
+    /// Whether the check of the asset runs.
     pub is_checking: bool,
+    /// Whether the hub cache holds each download chunk of the asset.
     pub is_done: bool,
+    /// Whether a fetch or an erase of the asset runs.
     pub is_busy: bool,
+    /// The plan of the fetch, and its progress.
     pub fetching: FetchState,
 }
 
@@ -400,10 +477,14 @@ impl Default for HubCacheState {
     }
 }
 
+/// The plan of a fetch, and its progress.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FetchState {
+    /// The count of the download chunks that the fetch handled, cached ones
+    /// included.
     pub current_download_chunk: usize,
+    /// The metadata of the file, after the check.
     pub metadata: Option<Metadata>,
-    pub download_chunk_list: DownloadChunkList, // pub total_chunk: usize,
-                                                // pub total_bytes: usize,
+    /// The download chunks of the file. An [Ok] entry is in the hub cache.
+    pub download_chunk_list: DownloadChunkList,
 }

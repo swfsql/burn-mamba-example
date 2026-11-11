@@ -1,32 +1,32 @@
 //! Byte-pair encoding over the byte-level alphabet.
 //!
-//! Matches `tokenizers`' `models::bpe::BPE` for the configurations used by
-//! `EleutherAI/gpt-neox-20b` and `meta-llama/Llama-3.1-8B`: no dropout, no
-//! unknown token, no continuing-subword prefix, no end-of-word suffix, and the
-//! optional `ignore_merges` short-circuit that Llama-3 sets.
+//! It gives the ids of `models::bpe::BPE` of `tokenizers` for the two supported
+//! tokenizers, `EleutherAI/gpt-neox-20b` and `meta-llama/Llama-3.1-8B`. Both
+//! have no dropout, no unknown token, no continuing-subword prefix and no
+//! end-of-word suffix. Llama-3 also sets `ignore_merges`.
 
 use std::collections::HashMap;
 
-/// Rank (merge priority) and resulting id of a merge rule.
+/// The rank (the merge priority) and the result id of a merge rule.
 #[derive(Clone, Copy, Debug)]
 struct Merge {
     rank: u32,
     new_id: u32,
 }
 
-/// The merge table, keyed by the pair of ids being joined.
+/// The merge table. Its key is the pair of ids that a merge joins.
 #[derive(Debug, Default)]
 pub struct Bpe {
     merges: HashMap<(u32, u32), Merge>,
-    /// `model.ignore_merges`: emit a whole pre-tokenized word that is itself a
-    /// vocabulary entry as that single id, without consulting the merge table.
+    /// `model.ignore_merges`: give a whole pre-tokenized word that is a
+    /// vocabulary entry as its one id, and do not use the merge table.
     ignore_merges: bool,
 }
 
 impl Bpe {
-    /// From the `model.merges` entries of a `tokenizer.json`, each `"<left> <right>"`,
-    /// resolved against `vocab`. Entries naming an unknown piece are skipped, the way
-    /// `tokenizers` does when a merge cannot be resolved.
+    /// Makes the table from the `model.merges` entries of a `tokenizer.json`,
+    /// each `"<left> <right>"`, with their ids in `vocab`. It skips each entry
+    /// with a piece that `vocab` does not hold, as `tokenizers` does.
     pub fn new<'a>(
         merges: impl IntoIterator<Item = (&'a str, &'a str)>,
         vocab: &HashMap<String, u32>,
@@ -52,16 +52,17 @@ impl Bpe {
         }
     }
 
-    /// Tokenizes one pre-tokenized word (already in the byte-level alphabet).
+    /// Tokenizes one pre-tokenized word, in the byte-level alphabet.
     ///
-    /// Repeatedly applies the lowest-ranked applicable merge, breaking ties towards
-    /// the left-most pair — the same order `tokenizers`' merge heap produces.
-    /// Characters absent from `vocab` are dropped (there is no unknown token).
+    /// It applies the merge with the lowest rank, again and again. Of two equal
+    /// ranks, it takes the pair on the left. This is the order of the merge
+    /// heap of `tokenizers`. It drops each character that `vocab` does not
+    /// hold, because there is no unknown token.
     ///
-    /// Under `ignore_merges` a word present in the vocabulary is emitted as-is
-    /// first. This is not an optimisation: for Llama-3 the merge table can reach
-    /// a *different* segmentation of a word that also exists whole, so skipping
-    /// the check changes ids.
+    /// With `ignore_merges`, a word in the vocabulary gives its own id first.
+    /// This is not an optimization. For Llama-3, the merge table can give a
+    /// *different* split of a word that the vocabulary holds whole. So without
+    /// this check, the ids change.
     pub fn tokenize(&self, word: &str, vocab: &HashMap<String, u32>) -> Vec<u32> {
         if self.ignore_merges
             && let Some(id) = vocab.get(word)
@@ -131,14 +132,14 @@ mod tests {
         assert_eq!(bpe.tokenize("azb", &vocab), vec![vocab["ab"]]);
     }
 
-    /// `ignore_merges` must take the whole-word id even when the merge table
-    /// would have segmented the word differently — the two disagree here, which
-    /// is exactly why the flag is not a mere fast path.
+    /// With `ignore_merges`, the tokenizer must take the id of the whole word,
+    /// also when the merge table splits the word differently. Here the two
+    /// give different ids. So the flag is not only a fast path.
     #[test]
     fn ignore_merges_prefers_the_whole_word() {
         let vocab = toy_vocab();
-        // Only "a"+"b" is reachable by merging, so without the flag "abc"
-        // segments as ["ab", "c"]; the whole word "abc" is in the vocab though.
+        // The only merge is "a"+"b". So without the flag, "abc" splits as
+        // ["ab", "c"]. But the vocabulary holds the whole word "abc".
         let merges = [("a", "b")];
         let plain = Bpe::new(merges, &vocab, false);
         assert_eq!(plain.tokenize("abc", &vocab), vec![vocab["ab"], vocab["c"]]);

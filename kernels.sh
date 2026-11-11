@@ -1,80 +1,86 @@
 #!/usr/bin/env bash
 #
-# kernels.sh — count the GPU kernel launches each benchmark case costs, and
-# collect the counts into a comparison report (kernels.md).
+# kernels.sh: counts the GPU kernel launches of each bench case, and writes the
+# counts into a comparison report (kernels.md).
 #
-# Same cases as `bench.sh`: one whole language model per compiled-in checkpoint,
-# on random weights, so nothing is downloaded.
+# The cases are the cases of `bench.sh`: the whole network of each compiled-in
+# checkpoint, with random weights. So the script fetches nothing.
 #
-# What is being counted
-# ---------------------
-# Every dispatch on a cubecl backend funnels through one function,
-# `ComputeClient::launch_inner`, which consults the profiling logger. At level
-# `basic` each `client.sync()` flushes a per-kernel summary table
-# (`Name | Duration | Num Computed | Ratio`) and resets it, so the launches
-# between two syncs are counted for us — no external profiler, and it works on
-# every cubecl backend, not just CUDA.
+# What the script counts
+# ----------------------
+# Each dispatch on a cubecl backend goes through one function,
+# `ComputeClient::launch_inner`, which reads the profiling logger. At the level
+# `basic`, each `client.sync()` writes a summary table for each kernel
+# (`Name | Duration | Num Computed | Ratio`) and resets it. So the table counts
+# the launches between two syncs. This needs no external profiler, and it works
+# on each cubecl backend, not only on CUDA.
 #
-# The runs below force `BENCH_SYNC_EVERY=0` and `BENCH_WARMUP_ITERS=1`, which
-# makes `benches/model.rs` sync twice per case under `--test`: once after the
-# warm-up loop (model construction + one iteration) and once at the end of
-# `timed()` (the measured iteration, alone). `--test` takes one sample and skips
-# criterion's warm-up, which is where the bench would otherwise probe and plan a
-# budgeted run, so that measured iteration really is a lone one. Its table is
-# therefore the **last** one the case emits, which is what the report reads. (The
-# bench's own default is `BENCH_SYNC_EVERY=1` — a sync per iteration, mirroring
-# how generation paces itself — which would split the measured iteration's
-# launches across two tables.)
+# The runs below set `BENCH_SYNC_EVERY=0` and `BENCH_WARMUP_ITERS=1`. Then
+# `benches/model.rs` syncs two times for each case in `--test` mode:
 #
-# Only the last table is pinned down, not the count: autotune syncs once per
-# candidate it benchmarks, so a case that tunes emits a table (usually of one
-# kernel) for each of them before its two. Tables are attributed to the case
-# criterion last announced with a `Testing <case>` line.
+#   - after the warm-up loop (the network build and one iteration),
+#   - at the end of `timed()` (the measured iteration, alone).
 #
-# cubecl logs from a detached task, so the tables lag the benchmark that produced
-# them — far enough that the last case's could be cut off mid-line by the process
-# exiting. `BENCH_LOG_DRAIN_MS` (below) is the pause `timed()` takes after each
-# case to let the logger catch up; raise it if the parser reports a truncated log.
+# `--test` takes one sample and skips the warm-up of criterion, where the bench
+# plans a budgeted run. So the measured iteration is alone. Its table is the
+# **last** table of the case, and the report reads that table. The default of
+# the bench is `BENCH_SYNC_EVERY=1`: a sync after each iteration, as the
+# generation does. That default splits the launches of the measured iteration
+# across two tables.
+#
+# The script relies on the position of the last table, not on the count of the
+# tables. Autotune syncs one time for each candidate that it benchmarks. So a
+# case that tunes writes a table (usually of one kernel) for each candidate,
+# before its two tables. The script gives each table to the case of the last
+# `Testing <case>` line of criterion.
+#
+# cubecl logs from a detached task, so the tables lag the bench. The lag can be
+# long enough that the exit of the process cuts the table of the last case.
+# `BENCH_LOG_DRAIN_MS` (below) is the pause of `timed()` after each case, so the
+# logger can write the tables. Increase it if the parser reports a truncated
+# log.
 #
 # One run is enough
 # -----------------
-# A launch count is a property of the op graph, not of the machine: it is exact
-# and repeatable, with none of the variance that makes criterion sample a
-# benchmark hundreds of times. So this drives the same binary with criterion's
-# `--test` mode (one iteration per case), and the whole matrix takes a couple of
-# minutes per configuration — nearly all of it model construction and kernel
-# compilation, not measurement.
+# A launch count is a property of the op graph, not of the machine. It is exact
+# and repeatable, with none of the variance that makes criterion sample a bench
+# hundreds of times. So the script runs the same binary in the `--test` mode of
+# criterion (one iteration for each case). The whole matrix takes a few minutes
+# for each configuration. The network build and the kernel compilation take
+# most of that time, not the measurement.
 #
-# Two consequences of the `basic` level are worth knowing: it times every launch
-# with `submit_blocking`, which serialises the queue (trust the counts, never
-# the wall-clock, from this run), and autotuning launches each candidate, which
-# is another reason the *last* table of a case is the one read — by then the
-# tuner has settled.
+# The `basic` level has two more effects:
+#
+#   - It times each launch with `submit_blocking`, which serializes the queue.
+#     So trust the counts of this run, but never its wall-clock times.
+#   - Autotune launches each candidate. This is one more reason to read the
+#     *last* table of a case: at that time, the tuner is done.
 #
 # Configurations
 # --------------
 #   cuda                  + backend-cuda                                  (no fusion, no autotune)
 #   cuda-fusion-autotune  backend-cuda,backend-fusion,backend-autotune    (as deployed)
 #
-# `flex` is absent on purpose: it is not a cubecl backend, so it launches no
-# kernels to count. Any other cubecl backend works — override the array below,
-# or point BURN_DEVICE/features at wgpu, vulkan, metal, rocm or cpu.
+# `flex` is absent on purpose. It is not a cubecl backend, so it launches no
+# kernels to count. Each other cubecl backend works: change the array below, or
+# set BURN_DEVICE and the features to wgpu, vulkan or cpu.
 #
-# The feature sets, target directories and `RUSTFLAGS` are shared with `bench.sh`,
-# so if you have run that, nothing is rebuilt here. The flags have to match: they
-# are part of the build fingerprint, so a row that pinned a different
-# `-C target-cpu` — or none, letting a `.cargo/config.toml` up the tree decide —
-# would rebuild the shared artifacts on every alternation between the two scripts.
-# A launch count is a property of the op graph, so the host ISA cannot change it
-# anyway; the baseline is pinned only to keep the sharing.
+# The feature sets, the target directories and `RUSTFLAGS` are the same as in
+# `bench.sh`. So after a run of `bench.sh`, this script rebuilds nothing. The
+# flags must agree, because they are part of the build fingerprint. A row with a
+# different `-C target-cpu`, or with none, rebuilds the shared artifacts at each
+# alternation between the two scripts. With no flag, a `.cargo/config.toml`
+# higher in the tree decides. The host ISA cannot change a launch count,
+# because the count is a property of the op graph. So the baseline is fixed only
+# for the sharing.
 #
 # Usage
 # -----
 #   ./kernels.sh                    # both configurations, every case
-#   ./kernels.sh step               # only cases matching the criterion filter
-#   BENCH_SEQ=1024 ./kernels.sh     # any BENCH_* the bench understands
+#   ./kernels.sh step               # only the cases that match the criterion filter
+#   BENCH_SEQ=1024 ./kernels.sh     # each BENCH_* setting of the bench
 #   KERNELS_SKIP=cuda-fusion-autotune ./kernels.sh   # skip configurations by label
-#   KERNELS_DRAIN_MS=3000 ./kernels.sh               # give the logger longer to drain
+#   KERNELS_DRAIN_MS=3000 ./kernels.sh               # give the logger more time
 
 set -euo pipefail
 cd "$(dirname "$0")"
