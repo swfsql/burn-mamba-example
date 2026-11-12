@@ -1,9 +1,8 @@
 //! The view of the browser page: [Model::view] renders the page with Bulma.
 
 use super::Msg;
-use super::model::AssetKind;
-pub use super::model::{self, Connection, Model};
-use crate::wasm::yew_ui::model::Asset;
+pub use super::model::{self, Model};
+use crate::common::assets::{Asset, AssetKind};
 use yew::prelude::*;
 
 impl model::Model {
@@ -71,7 +70,7 @@ impl model::Model {
         let controls = html_nested! {
             <div class="tile is-parent">
             <div class="tile is-child">
-                if self.wrapper.is_some() {
+                if self.assets.wrapper.is_some() {
                     if self.is_generating {
                         <button
                             class="button"
@@ -108,7 +107,7 @@ impl model::Model {
                 }
             </div>
             <div class="tile is-child">
-                if self.wrapper.is_some() {
+                if self.assets.wrapper.is_some() {
                     if self.is_generating {
                         <button
                             class="button"
@@ -146,8 +145,8 @@ impl model::Model {
             </div>
         };
 
-        let tokenizer_card = asset_card(link, &self.tokenizer, AssetKind::Tokenizer);
-        let weights_card = asset_card(link, &self.weights, AssetKind::Weights);
+        let tokenizer_card = asset_card(link, &self.assets.tokenizer, AssetKind::Tokenizer);
+        let weights_card = asset_card(link, &self.assets.weights, AssetKind::Weights);
 
         let assets = html_nested! {
             <div class="tile is-child is-vertical">
@@ -204,7 +203,7 @@ fn asset_card<M: yew::Component<Message = Msg>>(
         .unwrap_or_default();
     let total_bytes_human = &humansize::format_size(total_bytes, humansize::DECIMAL);
     let current_download_chunk = hub_cache.fetching.current_download_chunk;
-    let total_download_chunks = hub_cache.fetching.download_chunk_list.len();
+    let total_download_chunks = hub_cache.fetching.plan.len();
     let file_url = asset.config.file_url().0;
     let file_path = &asset.config.file_path().0;
     let data_load = match (load.is_checking, load.is_done, load.is_busy) {

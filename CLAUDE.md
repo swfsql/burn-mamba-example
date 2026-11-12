@@ -199,6 +199,7 @@ commit. See `docs/agents/code-review.md`.
 src/
 ├─ common/               the core, which each front-end and each backend uses
 │  ├─ mod.rs             `CheckpointSpec`, `hf` (the topologies, `CHECKPOINTS`), the run wrapper
+│  ├─ assets.rs          the asset states and the wrapper builder of the browser front-ends. Only the browser page uses it
 │  ├─ store_load.rs      `build_network` (the network from a weights file), the vendored manifests
 │  ├─ tokenizer/         the `tokenizer.json` reader: the gpt-neox and Llama-3.1 pipelines
 │  ├─ hub/               the hub client: `sync.rs` natively, `wasm.rs` in the browser

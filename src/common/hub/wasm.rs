@@ -17,8 +17,9 @@
 //! the lexicographic order of the keys in IndexedDB is the numeric order.
 
 use super::{
-    BlobHash, Endpoint, FilePath, FileUrl, HubError, Metadata, Repo, RepoId, RepoType,
-    RevisionHash, UrlTemplate, clean_etag, size_from_content_range,
+    BlobHash, DownloadChunkKey, DownloadChunkPlan, Endpoint, FilePath, FileUrl, HubError,
+    Metadata, Repo, RepoId, RepoType, RevisionHash, UrlTemplate, clean_etag,
+    plan_download_chunks, size_from_content_range,
 };
 use indexed_db_futures::prelude::*;
 use indexed_db_futures::{IdbDatabase, IdbQuerySource, idb_transaction::IdbTransaction};
@@ -38,52 +39,6 @@ const DB_NAME: &str = "burn-mamba-example";
 const DB_VERSION: u32 = 1;
 const KEY_ROOT: &str = "huggingface/hub";
 const DOWNLOAD_CHUNK_STORE: &str = "download-chunks";
-
-/// The key and the byte range of one download chunk of one blob.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DownloadChunkKey {
-    /// The IndexedDB key.
-    pub key: String,
-    /// Offset of the first byte, within the whole file.
-    pub start: usize,
-    /// Offset just past the last byte.
-    pub end: usize,
-}
-
-impl DownloadChunkKey {
-    fn new(blob_prefix: &str, start: usize, end: usize, total_size: usize) -> Self {
-        let width = total_size.checked_ilog10().unwrap_or(0) as usize + 1;
-        Self {
-            key: format!("{blob_prefix}/{start:0width$}-{end:0width$}"),
-            start,
-            end,
-        }
-    }
-
-    /// Parses a key from IndexedDB. Returns `None` for a key of another
-    /// format.
-    fn parse(key: String) -> Option<Self> {
-        let (_prefix, offsets) = key.rsplit_once('/')?;
-        let (start, end) = offsets.split_once('-')?;
-        let start = start.parse().ok()?;
-        let end = end.parse().ok()?;
-        Some(Self { key, start, end })
-    }
-
-    /// Number of bytes this download chunk holds.
-    pub fn len(&self) -> usize {
-        self.end - self.start
-    }
-
-    /// Whether this download chunk holds no byte.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-/// The download chunks of a file, in order. An [Ok] entry is in the hub cache.
-/// An [Err] entry is not, so the client must fetch it.
-pub type DownloadChunkList = Vec<Result<DownloadChunkKey, DownloadChunkKey>>;
 
 /// A hub client, with the open connection to IndexedDB.
 #[derive(Clone)]
@@ -294,8 +249,6 @@ impl Api {
         Ok(keys
             .into_iter()
             .filter_map(|key| DownloadChunkKey::parse(key.as_string()?))
-            // An entry of length zero would stall the walk of `check`.
-            .filter(|download_chunk| !download_chunk.is_empty())
             .collect())
     }
 }
@@ -319,41 +272,18 @@ impl ApiRepo {
         )
     }
 
-    /// Plans the download chunks of a file: the ranges in the hub cache, and
-    /// the ranges to fetch.
-    ///
-    /// The plan uses a cached download chunk only when it starts at the offset
-    /// of the walk. So a hub cache with another download chunk length still
-    /// gives a valid plan, but the plan can fetch some bytes again.
-    pub async fn check(&self, metadata: &Metadata) -> Result<DownloadChunkList, HubError> {
+    /// Plans the download chunks of a file. It reads the cached keys of the
+    /// blob from IndexedDB, then gives them to [plan_download_chunks].
+    pub async fn check(&self, metadata: &Metadata) -> Result<DownloadChunkPlan, HubError> {
         let blob_prefix = self.blob_prefix(&metadata.etag);
         let size = metadata.size;
         let cached = self.api.cached_download_chunks(&blob_prefix, size).await?;
-
-        let mut download_chunks = DownloadChunkList::new();
-        let mut cached_iter = cached.into_iter().peekable();
-        let mut offset = 0;
-        while offset < size {
-            // Skip the cached download chunks that start before the offset.
-            // They come from a plan with another download chunk length.
-            while cached_iter.peek().is_some_and(|c| c.start < offset) {
-                cached_iter.next();
-            }
-            if cached_iter.peek().is_some_and(|c| c.start == offset) {
-                let cached = cached_iter.next().expect("just peeked");
-                offset = cached.end;
-                download_chunks.push(Ok(cached));
-                continue;
-            }
-            // End the download chunk to fetch where the next cached one starts.
-            // Each remaining cached download chunk starts after `offset`.
-            let limit = cached_iter.peek().map_or(size, |c| c.start.min(size));
-            let end = (offset + self.api.download_chunk_len).min(limit);
-            download_chunks.push(Err(DownloadChunkKey::new(&blob_prefix, offset, end, size)));
-            offset = end;
-        }
-
-        Ok(download_chunks)
+        Ok(plan_download_chunks(
+            &blob_prefix,
+            size,
+            self.api.download_chunk_len,
+            cached,
+        ))
     }
 
     /// Returns a whole file. It plans the download chunks, fetches the missing
@@ -363,10 +293,10 @@ impl ApiRepo {
     pub async fn get_bytes(&self, filename: &FilePath) -> Result<Vec<u8>, HubError> {
         let url = self.url(filename);
         let metadata = self.api.metadata(&url).await?;
-        let download_chunks = self.check(&metadata).await?;
+        let plan = self.check(&metadata).await?;
 
-        let mut keys = Vec::with_capacity(download_chunks.len());
-        for download_chunk in download_chunks {
+        let mut keys = Vec::with_capacity(plan.len());
+        for download_chunk in plan {
             let download_chunk = match download_chunk {
                 Ok(cached) => cached,
                 Err(missing) => {

@@ -81,6 +81,9 @@ pretty_env_logger = { version = "0.5.0", optional = true }
 ## `getrandom_backend="wasm_js"` rustflag in .cargo/config.toml rejects that
 ## version, because this build does not turn on its `wasm_js` feature.
 rand = { version = "0.9.2", default-features = false, features = ["std", "std_rng"] }
+## `Instant` for the timings of the browser front-ends and of
+## src/common/assets.rs. Natively, it is `std::time`.
+web-time = "1.1.0"
 
 #
 ## tokenizer.json parsing (see src/common/tokenizer/)
@@ -115,7 +118,6 @@ wasm-bindgen = { version = "0.2.100", features = ["serde-serialize"] }
 wasm-bindgen-futures = "0.4.50"
 log = "0.4.26"
 console_log = { version = "1.0.0", features = ["color"] }
-web-time = "1.1.0"
 #
 ## https://github.com/rust-random/getrandom/#webassembly-support
 getrandom = { version = "0.4.2", features = ["wasm_js"] }

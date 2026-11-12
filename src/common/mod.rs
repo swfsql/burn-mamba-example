@@ -8,6 +8,8 @@
 //! calls `Device::default()`, then `configure` with [PRECISION_FLOAT_D_TYPE]
 //! and [PRECISION_INT_D_TYPE]: f32 and i32 (ADR-0003).
 
+#[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]
+pub mod assets;
 pub mod hub;
 pub mod sampling;
 #[cfg(any(feature = "mamba1", feature = "mamba2", feature = "mamba3"))]

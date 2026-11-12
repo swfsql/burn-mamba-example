@@ -1,31 +1,18 @@
 //! The browser page, built with Yew. [Msg] is the whole protocol of the page,
 //! [update] is its reducer, and [view] renders the [Model] with Bulma.
 //!
-//! Each [Asset](model::Asset), the tokenizer file or the weights file, has two
-//! separate states: its [HubCacheState](model::HubCacheState) in IndexedDB, and
-//! its [Load](model::Load) in memory. So the page can fetch, erase, load and
-//! unload each asset separately.
-//!
-//! - [ApiRepo::check](crate::hub::wasm::ApiRepo::check) gives a
-//!   [DownloadChunkList]. It is the plan of the fetch, and also its progress
-//!   bar.
-//! - [MambaWrapperBuilder::with](model::MambaWrapperBuilder::with) builds the
-//!   tokenizer or the network from the loaded bytes of an asset, and drops the
-//!   bytes.
-//! - The page makes the [Wrapper](model::Wrapper) only after it builds the
-//!   tokenizer and the network.
-//!
-//! The generation does one step for each tick of a 1ms interval, so the
-//! browser can paint between two steps.
+//! The reducer gives the asset state to [crate::common::assets]. The
+//! generation does one step for each tick of a 1ms interval, so the browser
+//! can paint between two steps.
 
 pub mod model;
 pub mod update;
 pub mod view;
 
-use self::model::AssetKind;
-use crate::hub::wasm::{Api, DownloadChunkList};
-use crate::hub::{HubError, Metadata};
-pub use model::{Connection, Model};
+use crate::common::assets::AssetKind;
+use crate::hub::wasm::Api;
+use crate::hub::{DownloadChunkPlan, HubError, Metadata};
+pub use model::Model;
 use yew::prelude::*;
 
 /// A message of the browser page. [Model::update] handles each one.
@@ -49,7 +36,7 @@ pub enum Msg {
     /// the hub cache.
     StartAssetCheck(AssetKind),
     /// Ends the check of an asset.
-    FinishAssetCheck(AssetKind, Metadata, DownloadChunkList),
+    FinishAssetCheck(AssetKind, Metadata, DownloadChunkPlan),
     /// Not implemented: the update panics. No code sends it, because a failed
     /// check panics before.
     FailAssetCheck,
@@ -82,9 +69,9 @@ pub enum Msg {
     /// Unloads an asset: it frees the bytes of the asset, and the tokenizer or
     /// the network that the page built from them.
     ///
-    /// When the page has a [model::Wrapper], the unload drops it. So the
-    /// unload of one asset also unloads the other asset. A running generation
-    /// stops first.
+    /// When the page has a [Wrapper](crate::common::assets::Wrapper), the
+    /// unload drops it. So the unload of one asset also unloads the other
+    /// asset. A running generation stops first.
     AssetUnload(AssetKind),
     /// Starts the erase of an asset from the hub cache. The erase frees the
     /// storage of the browser.
@@ -101,8 +88,8 @@ pub enum Msg {
     /// Not implemented: the update panics. No code sends it, because a failed
     /// build panics before.
     FailAssetBuild,
-    /// Makes the [model::Wrapper] when the page built the tokenizer and the
-    /// network. The generation uses the wrapper.
+    /// Makes the [Wrapper](crate::common::assets::Wrapper) when the page built
+    /// the tokenizer and the network. The generation uses the wrapper.
     TryAssembleWrapper,
 
     // The input.

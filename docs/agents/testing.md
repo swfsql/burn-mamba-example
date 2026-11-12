@@ -9,6 +9,7 @@
 | Compiled-in checkpoint list | The tests of `src/common/mod.rs` | A wrong priority order, an id that does not resolve, a wrong Mamba-3 chunk length, or a Mamba-3 rotation or stock knob that is not the value of the reference | Another wrong value in a hardcoded topology |
 | Checkpoint against module | `checkpoints_and_modules_hold_the_same_tensors` and `remapping_rules_all_fire` in `src/common/store_load.rs` | A tensor without a parameter, a parameter without a tensor that is not in `ALLOWED_MISSING`, a wrong shape, two names that collide, or a rule that matches nothing | A vendored manifest that is not complete |
 | Manifest against checkpoint (`#[ignore]`) | `manifests_cover_the_whole_checkpoint` in `src/common/store_load.rs`. It downloads each missing checkpoint. | A vendored manifest that misses a tensor of the real header, or has a wrong shape | An error in the loaded values |
+| Asset state | The `tests` of `src/common/assets.rs`, and the plan tests in `src/common/hub/mod.rs` | A broken rule of the asset lifecycle, a plan with a gap or an overlap, or a change of the key layout | The calls to `fetch` and to IndexedDB, and the messages and the view of the browser page |
 | Sequential against parallel | The native binary (`native::main`). Only the user runs it. | A backend or a pin that breaks one run mode | A bug that both run modes share. A run on `flex` or `ndarray` gives the correct text. |
 
 ## Expected values
@@ -21,8 +22,8 @@ An expected value comes from a source outside the code under test:
 
 ## Outside the seams
 
-- The browser page and the browser console have no tests. The wasm `cargo check` steps of `scripts/check.sh` show that they compile. Only a run in the browser shows that they work, and only the user does that run.
-- `src/common/hub/` has no tests of its own. A download, as in a native run or in `manifests_cover_the_whole_checkpoint`, exercises it.
+- Only the asset logic of the browser page has tests (the asset state seam). The messages, the reducer and the view of the page have no tests, and the browser console has no tests. The wasm `cargo check` steps of `scripts/check.sh` show that they compile. Only a run in the browser shows that they work, and only the user does that run.
+- In `src/common/hub/`, only the plan and the key layout have tests. A download, as in a native run or in `manifests_cover_the_whole_checkpoint`, exercises the rest.
 - The tests run on `flex`. A failure that only another backend shows needs a run on that backend.
 
 ## Bench gates
