@@ -1,6 +1,6 @@
 # 06: Split the asset logic from the Yew page
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: None (can start immediately)
 Spec: `.scratch/docs-overhaul/spec.md`
 
@@ -32,6 +32,28 @@ its reducer and its view.
   that use the term.
 - The items that no code uses stay. The maintainer plans to implement them
   later.
+
+### Result
+
+- **The browser run.** The user ran the page: check, fetch, load, generate,
+  unload, load again and erase. The generation gives correct text.
+- **The File Map line** says "Only the browser page uses it", not "only the
+  browser front-ends". The browser console does not use the module.
+- **`Asset::finish_erase`** marks an entry that is not cached as not cached,
+  and does not panic on it. The old code panicked. No page state can give
+  this case, because `start_erase` panics unless the hub cache holds each
+  download chunk of the plan.
+- **The header of the Yew page** keeps the sentence about the 1ms interval
+  of the generation. It also links to `crate::common::assets`.
+- **The review smells that stay** are in code that only moved:
+  - the `Option` spec of `MambaWrapperBuilder`, because `merge` stays,
+  - the `Err` entry for a download chunk that is not cached,
+  - the sampler values that `Wrapper::new` and `Msg::ResetCaches` both hold.
+- **A doc that says less than the code does.** The `Asset` entry of
+  `GLOSSARY.md` and the header of `src/common/assets.rs` say that a
+  front-end unloads each asset separately. With a run wrapper, the unload of
+  one asset also unloads the other (`Assets::unload`). Ticket 05 found this
+  in the old header. A sharper entry needs `/domain-modeling`.
 
 ## Agent Brief
 
@@ -121,14 +143,14 @@ native tests can run it, and a future web front-end can use it.
 
 **Acceptance criteria:**
 
-- [ ] The Yew page imports each moved item from `crate::common::assets`. Its
+- [x] The Yew page imports each moved item from `crate::common::assets`. Its
       state module holds only `Model` and its `Default` impl.
-- [ ] On a native target, the module and the shared hub types need no
+- [x] On a native target, the module and the shared hub types need no
       `yew`, `gloo-timers`, `web-sys`, `js-sys` or `indexed_db_futures`.
-- [ ] `rg 'preferred\(' src/common/assets.rs` finds no match.
-- [ ] `rg -i 'download_?chunk_?list'` finds no match in the repo, the
+- [x] `rg 'preferred\(' src/common/assets.rs` finds no match.
+- [x] `rg -i 'download_?chunk_?list'` finds no match in the repo, the
       `.scratch/` tracker excluded.
-- [ ] Native tests of `plan_download_chunks`. In each test, the entries of the
+- [x] Native tests of `plan_download_chunks`. In each test, the entries of the
       plan are contiguous from offset 0 to the file size:
   - An empty hub cache gives only entries to fetch, each of the download
     chunk length. The last entry ends at the file size.
@@ -138,10 +160,10 @@ native tests can run it, and a future web front-end can use it.
     at its start.
   - A file of size zero gives an empty plan.
   - A cached key of length zero has no effect on the plan.
-- [ ] Native tests of the state methods: one test or more for each rule of
+- [x] Native tests of the state methods: one test or more for each rule of
       point 4. The tests need no weights file and no tokenizer file.
-- [ ] `scripts/check.sh` passes, and runs the new tests.
-- [ ] The docs follow, in the style of `asd-ste100`:
+- [x] `scripts/check.sh` passes, and runs the new tests.
+- [x] The docs follow, in the style of `asd-ste100`:
   - The header of the new module describes the asset lifecycle. That text
     moves from the header of the Yew page.
   - The header of the Yew page names only its messages, its reducer and its
@@ -153,9 +175,9 @@ native tests can run it, and a future web front-end can use it.
   - `docs/agents/testing.md` has a row for the new seam. Its "Outside the
     seams" section says that only the asset logic of the browser page has
     tests.
-- [ ] These stay the same: the IndexedDB names and the key layout, the page
+- [x] These stay the same: the IndexedDB names and the key layout, the page
       labels, the `Msg` variants and the behavior of the page.
-- [ ] The user runs the page in the browser before the ticket closes: check,
+- [x] The user runs the page in the browser before the ticket closes: check,
       fetch, load, generate, unload, load again and erase.
 
 **Out of scope:**
